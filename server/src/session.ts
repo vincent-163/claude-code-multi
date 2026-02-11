@@ -6,7 +6,7 @@ import * as path from 'path';
 import { Config } from './config';
 import { logger } from './logger';
 
-export type SessionStatus = 'starting' | 'ready' | 'busy' | 'dead';
+export type SessionStatus = 'starting' | 'ready' | 'busy' | 'waiting_for_input' | 'dead';
 
 export interface BufferedEvent {
   id: number;
@@ -25,6 +25,8 @@ export class Session {
   lastActiveAt: number;
   pid: number | undefined;
   cliSessionId: string | undefined;
+
+  totalCostUsd: number = 0;
 
   /** Resolves when the CLI emits its system init message with session_id */
   readonly cliSessionIdReady: Promise<string>;
@@ -88,6 +90,8 @@ export class Session {
             this.onCliSessionId?.(this.id, newCliId);
             this.resolveCliSessionId(newCliId);
           }
+          // Track session status from CLI message types
+          this.updateStatusFromMessage(parsed);
           this.pushEvent('message', parsed);
         } catch {
           // Non-JSON output, send as raw text
@@ -214,6 +218,7 @@ export class Session {
       working_directory: this.workingDirectory,
       pid: this.pid,
       cli_session_id: this.cliSessionId,
+      total_cost_usd: this.totalCostUsd,
     };
   }
 
@@ -225,6 +230,7 @@ export class Session {
       last_active_at: this.lastActiveAt,
       working_directory: this.workingDirectory,
       cli_session_id: this.cliSessionId,
+      total_cost_usd: this.totalCostUsd,
     };
   }
 
@@ -312,6 +318,42 @@ export class Session {
       };
     } catch {
       return null;
+    }
+  }
+
+  private updateStatusFromMessage(parsed: Record<string, unknown>): void {
+    const type = parsed.type as string | undefined;
+    if (!type) return;
+
+    if (type === 'assistant') {
+      // CLI is generating a response
+      if (this.status !== 'dead') {
+        this.status = 'busy';
+        this.pushEvent('status', { status: 'busy' });
+      }
+    } else if (type === 'control_request') {
+      // CLI is asking for permission
+      const request = parsed.request as Record<string, unknown> | undefined;
+      const subtype = request?.subtype as string | undefined;
+      if (subtype === 'can_use_tool' && this.status !== 'dead') {
+        this.status = 'waiting_for_input';
+        this.pushEvent('status', { status: 'waiting_for_input' });
+      }
+    } else if (type === 'result') {
+      // Turn complete
+      if (this.status !== 'dead') {
+        this.status = 'ready';
+        this.pushEvent('status', { status: 'ready' });
+      }
+      // Track cost
+      const costUsd = parsed.cost_usd as number | undefined;
+      if (typeof costUsd === 'number') {
+        this.totalCostUsd = costUsd;
+      }
+      const totalCost = parsed.total_cost_usd as number | undefined;
+      if (typeof totalCost === 'number') {
+        this.totalCostUsd = totalCost;
+      }
     }
   }
 

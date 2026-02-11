@@ -289,7 +289,8 @@ private data class SessionResponse(
     @SerializedName("created_at") val createdAt: Double?,
     @SerializedName("last_active_at") val lastActiveAt: Double?,
     @SerializedName("working_directory") val workingDirectory: String?,
-    val pid: Int?
+    val pid: Int?,
+    @SerializedName("total_cost_usd") val totalCostUsd: Double?
 ) {
     fun toSession() = Session(
         id = id,
@@ -297,7 +298,8 @@ private data class SessionResponse(
         createdAt = createdAt ?: 0.0,
         lastActiveAt = lastActiveAt,
         workingDirectory = workingDirectory ?: "",
-        pid = pid
+        pid = pid,
+        totalCostUsd = totalCostUsd
     )
 }
 
@@ -308,6 +310,7 @@ data class SessionDetailResponse(
     @SerializedName("last_active_at") val lastActiveAt: Double?,
     @SerializedName("working_directory") val workingDirectory: String?,
     val pid: Int?,
+    @SerializedName("total_cost_usd") val totalCostUsd: Double?,
     val history: List<Map<String, Any>>?,
     @Transient val rawHistory: List<JsonObject> = emptyList()
 ) {
@@ -317,6 +320,7 @@ data class SessionDetailResponse(
         createdAt = createdAt ?: 0.0,
         lastActiveAt = lastActiveAt,
         workingDirectory = workingDirectory ?: "",
-        pid = pid
+        pid = pid,
+        totalCostUsd = totalCostUsd
     )
 }

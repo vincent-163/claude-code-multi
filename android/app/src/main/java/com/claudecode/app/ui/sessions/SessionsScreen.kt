@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.claudecode.app.data.model.Session
 import com.claudecode.app.data.model.SessionStatus
+import com.claudecode.app.ui.theme.AccentBlue
 import com.claudecode.app.ui.theme.AccentGreen
 import com.claudecode.app.ui.theme.AccentOrange
 import com.claudecode.app.ui.theme.AccentRed
@@ -195,6 +196,7 @@ private fun SessionCard(
                     SessionStatus.Ready -> AccentGreen
                     SessionStatus.Busy -> AccentOrange
                     SessionStatus.Starting -> AccentOrange
+                    SessionStatus.WaitingForInput -> AccentBlue
                     SessionStatus.Dead, SessionStatus.Destroyed -> AccentRed
                 }
             )
@@ -211,11 +213,36 @@ private fun SessionCard(
                         color = TextSecondary
                     )
                 }
-                Text(
-                    session.status.name.lowercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextSecondary
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val statusLabel = when (session.status) {
+                        SessionStatus.WaitingForInput -> "waiting for input"
+                        else -> session.status.name.lowercase()
+                    }
+                    val statusColor = when (session.status) {
+                        SessionStatus.Ready -> AccentGreen
+                        SessionStatus.Busy -> AccentOrange
+                        SessionStatus.WaitingForInput -> AccentBlue
+                        SessionStatus.Starting -> AccentOrange
+                        SessionStatus.Dead, SessionStatus.Destroyed -> AccentRed
+                    }
+                    Text(
+                        statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor
+                    )
+                    session.totalCostUsd?.let { cost ->
+                        if (cost > 0) {
+                            Text(
+                                "$${String.format("%.4f", cost)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
             }
             IconButton(onClick = onDelete) {
                 Icon(

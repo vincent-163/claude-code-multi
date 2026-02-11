@@ -6,13 +6,15 @@ data class Session(
     val createdAt: Double,
     val lastActiveAt: Double? = null,
     val workingDirectory: String,
-    val pid: Int? = null
+    val pid: Int? = null,
+    val totalCostUsd: Double? = null
 )
 
 enum class SessionStatus {
     Starting,
     Ready,
     Busy,
+    WaitingForInput,
     Dead,
     Destroyed;
 
@@ -21,6 +23,7 @@ enum class SessionStatus {
             "starting" -> Starting
             "ready" -> Ready
             "busy" -> Busy
+            "waiting_for_input" -> WaitingForInput
             "dead" -> Dead
             "destroyed" -> Destroyed
             else -> Dead
