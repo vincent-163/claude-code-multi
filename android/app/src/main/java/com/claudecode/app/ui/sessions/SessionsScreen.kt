@@ -151,7 +151,9 @@ fun SessionsScreen(
     }
 
     if (showNewSessionDialog) {
+        val defaultWorkingDir by viewModel.defaultWorkingDir.collectAsState()
         NewSessionDialog(
+            initialWorkingDir = defaultWorkingDir,
             onDismiss = { showNewSessionDialog = false },
             onCreate = { workingDir, skipPermissions, extraFlags ->
                 showNewSessionDialog = false
@@ -228,10 +230,11 @@ private fun SessionCard(
 
 @Composable
 private fun NewSessionDialog(
+    initialWorkingDir: String = "",
     onDismiss: () -> Unit,
     onCreate: (String, Boolean, List<String>) -> Unit
 ) {
-    var workingDir by remember { mutableStateOf("") }
+    var workingDir by remember { mutableStateOf(initialWorkingDir) }
     var skipPermissions by remember { mutableStateOf(false) }
     var extraFlags by remember { mutableStateOf("") }
 

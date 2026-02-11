@@ -2,16 +2,23 @@ package com.claudecode.app.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.claudecode.app.data.SettingsRepository
 import com.claudecode.app.data.model.Session
 import com.claudecode.app.network.ApiClient
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class SessionsViewModel(
-    private val apiClient: ApiClient
+    private val apiClient: ApiClient,
+    settingsRepository: SettingsRepository
 ) : ViewModel() {
+
+    val defaultWorkingDir: StateFlow<String> = settingsRepository.lastWorkingDirectory
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()

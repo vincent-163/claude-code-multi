@@ -47,7 +47,7 @@ fun AppNavigation() {
 
         is Screen.Sessions -> {
             BackHandler { currentScreen = Screen.Connection }
-            val sessionsViewModel = remember { SessionsViewModel(app.apiClient) }
+            val sessionsViewModel = remember { SessionsViewModel(app.apiClient, app.settingsRepository) }
             SessionsScreen(
                 viewModel = sessionsViewModel,
                 onSessionSelected = { sessionId ->
