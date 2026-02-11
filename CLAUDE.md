@@ -67,6 +67,10 @@ sess.json                    # Example session JSON dump for reference
 - **Chat**: ChatScreen subscribes via SSE (GET /sessions/:id/stream). Server relays CLI stdout lines as SSE events with no content transformation. User input sent via POST /sessions/:id/input with type=user_message; server writes it to CLI stdin. Tool results sent with type=tool_result.
 - **Permission approval**: Server launches CLI with `--permission-prompt-tool stdio` and sends an initialize control_request at session start. When CLI needs permission, it emits a `control_request` event (type=message, subtype=can_use_tool) with request_id, tool_name, input, blocked_path. Client renders approve/deny UI. Responses sent via POST /sessions/:id/input with type=control_response. Server forwards control messages as-is without parsing.
 
+## Workflow
+
+Always commit and push after every change.
+
 ## Build
 
 Requires: Android SDK at `~/Android/Sdk`, Java 17.
