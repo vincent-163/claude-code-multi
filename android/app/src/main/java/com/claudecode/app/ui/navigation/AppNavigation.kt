@@ -1,5 +1,6 @@
 package com.claudecode.app.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +46,7 @@ fun AppNavigation() {
         }
 
         is Screen.Sessions -> {
+            BackHandler { currentScreen = Screen.Connection }
             val sessionsViewModel = remember { SessionsViewModel(app.apiClient) }
             SessionsScreen(
                 viewModel = sessionsViewModel,
@@ -64,6 +66,7 @@ fun AppNavigation() {
         }
 
         is Screen.Chat -> {
+            BackHandler { currentScreen = Screen.Sessions }
             val chatViewModel = remember(screen.sessionId) {
                 ChatViewModel(app.apiClient, screen.sessionId)
             }
@@ -74,6 +77,7 @@ fun AppNavigation() {
         }
 
         is Screen.Settings -> {
+            BackHandler { currentScreen = previousScreen }
             val settingsViewModel = remember {
                 SettingsViewModel(app.settingsRepository, app.apiClient)
             }
