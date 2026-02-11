@@ -256,7 +256,12 @@ class ChatViewModel(
 
     fun sendInterrupt() {
         viewModelScope.launch {
-            apiClient.sendInput(sessionId, "interrupt")
+            apiClient.sendInput(sessionId, "interrupt").fold(
+                onSuccess = { /* sent */ },
+                onFailure = { e ->
+                    addMessage(ChatMessage.ErrorMessage(content = "Failed to interrupt: ${e.message}"))
+                }
+            )
         }
     }
 

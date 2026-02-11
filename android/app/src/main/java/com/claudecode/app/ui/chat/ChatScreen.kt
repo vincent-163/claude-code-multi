@@ -194,7 +194,9 @@ fun ChatScreen(
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
-                    placeholder = { Text("Message Claude Code...") },
+                    placeholder = {
+                        Text(if (sessionStatus == "busy") "Claude is working..." else "Message Claude Code...")
+                    },
                     modifier = Modifier.weight(1f),
                     maxLines = 4,
                     colors = TextFieldDefaults.outlinedTextFieldColors(
@@ -203,24 +205,37 @@ fun ChatScreen(
                     )
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
-                            viewModel.sendMessage(inputText.trim())
-                            inputText = ""
-                        }
-                    },
-                    enabled = inputText.isNotBlank() && isConnected
-                ) {
-                    Icon(
-                        Icons.Default.Send,
-                        contentDescription = "Send",
-                        tint = if (inputText.isNotBlank() && isConnected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            TextMuted
-                        }
-                    )
+                if (sessionStatus == "busy") {
+                    IconButton(
+                        onClick = { viewModel.sendInterrupt() },
+                        enabled = isConnected
+                    ) {
+                        Icon(
+                            Icons.Default.Stop,
+                            contentDescription = "Stop",
+                            tint = if (isConnected) AccentRed else TextMuted
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                viewModel.sendMessage(inputText.trim())
+                                inputText = ""
+                            }
+                        },
+                        enabled = inputText.isNotBlank() && isConnected
+                    ) {
+                        Icon(
+                            Icons.Default.Send,
+                            contentDescription = "Send",
+                            tint = if (inputText.isNotBlank() && isConnected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                TextMuted
+                            }
+                        )
+                    }
                 }
             }
         }
