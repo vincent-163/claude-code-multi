@@ -208,30 +208,18 @@ fun ChatScreen(
                     )
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                if (isBusy) {
-                    IconButton(
-                        onClick = { viewModel.sendInterrupt() },
-                        enabled = isConnected
-                    ) {
-                        Icon(
-                            Icons.Default.Stop,
-                            contentDescription = "Stop",
-                            tint = if (isConnected) AccentRed else TextMuted
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText.trim())
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank() && isConnected
-                    ) {
-                        Icon(
-                            Icons.Default.Send,
-                            contentDescription = "Send",
+                IconButton(
+                    onClick = {
+                        if (inputText.isNotBlank()) {
+                            viewModel.sendMessage(inputText.trim())
+                            inputText = ""
+                        }
+                    },
+                    enabled = inputText.isNotBlank() && isConnected
+                ) {
+                    Icon(
+                        Icons.Default.Send,
+                        contentDescription = "Send",
                             tint = if (inputText.isNotBlank() && isConnected) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -239,7 +227,6 @@ fun ChatScreen(
                             }
                         )
                     }
-                }
             }
         }
     }
