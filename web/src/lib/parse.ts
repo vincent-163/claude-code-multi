@@ -62,6 +62,20 @@ function parseMessageEvent(d: Record<string, unknown>): ChatMessage | null {
     };
   }
 
+  if (type === 'control_response') {
+    const response = d.response as Record<string, unknown> | undefined;
+    const requestId = response?.request_id as string | undefined;
+    const innerResponse = response?.response as Record<string, unknown> | undefined;
+    const behavior = innerResponse?.behavior as string | undefined;
+    if (requestId) {
+      return {
+        kind: 'control_response',
+        request_id: requestId,
+        approved: behavior === 'allow',
+      };
+    }
+  }
+
   // raw / stderr / other message types — show as system
   if (type === 'raw' || type === 'stderr') {
     const text = typeof d.data === 'string' ? d.data : JSON.stringify(d.data);

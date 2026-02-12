@@ -79,6 +79,12 @@ export interface ControlRequestMessage {
   blocked_path?: string;
 }
 
+export interface ControlResponseMessage {
+  kind: 'control_response';
+  request_id: string;
+  approved: boolean;
+}
+
 export interface UserMessage {
   kind: 'user';
   content: string;
@@ -92,6 +98,7 @@ export type ChatMessage =
   | ErrorMessage
   | ExitMessage
   | ControlRequestMessage
+  | ControlResponseMessage
   | UserMessage;
 
 // --- SSE ---

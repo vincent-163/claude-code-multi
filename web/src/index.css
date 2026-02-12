@@ -277,6 +277,14 @@ input:focus, textarea:focus, select:focus {
   margin-bottom: 8px;
 }
 .control-request .cr-actions { display: flex; gap: 8px; }
+.control-request .cr-status {
+  font-size: 13px;
+  font-weight: 600;
+}
+.control-request .cr-status.allowed { color: var(--green); }
+.control-request .cr-status.denied { color: var(--red); }
+.control-request .cr-status.pending { color: var(--text-dim); }
+.control-request.resolved { border-color: var(--border); opacity: 0.8; }
 
 /* Input bar */
 .input-bar {

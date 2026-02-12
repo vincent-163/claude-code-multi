@@ -18,6 +18,8 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [input, setInput] = useState('')
   const [cost, setCost] = useState(0)
   const [sseError, setSseError] = useState('')
+  const [pendingResponses, setPendingResponses] = useState<Set<string>>(new Set())
+  const [resolvedRequests, setResolvedRequests] = useState<Map<string, boolean>>(new Map())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastEventIdRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -40,6 +42,7 @@ export default function ChatPage({ settings, onBack }: Props) {
 
         // Parse history
         const historyMsgs: ChatMessage[] = []
+        const historyResolved = new Map<string, boolean>()
         for (const evt of data.history) {
           if (evt.id > lastEventIdRef.current) lastEventIdRef.current = evt.id
           const msg = parseEvent(evt)
@@ -48,11 +51,14 @@ export default function ChatPage({ settings, onBack }: Props) {
               setStatus(msg.status as SessionStatus)
             } else if (msg.kind === 'result' && msg.total_cost_usd) {
               setCost(msg.total_cost_usd)
+            } else if (msg.kind === 'control_response') {
+              historyResolved.set(msg.request_id, msg.approved)
             } else {
               historyMsgs.push(msg)
             }
           }
         }
+        setResolvedRequests(historyResolved)
         setMessages(historyMsgs)
       } catch {
         setSseError('Failed to load session')
@@ -73,6 +79,11 @@ export default function ChatPage({ settings, onBack }: Props) {
           }
           if (msg.kind === 'result' && msg.total_cost_usd) {
             setCost(msg.total_cost_usd)
+          }
+          if (msg.kind === 'control_response') {
+            setResolvedRequests((prev) => new Map(prev).set(msg.request_id, msg.approved))
+            setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
+            return
           }
           // For assistant messages: replace last if streaming, else append
           setMessages((prev) => {
@@ -118,24 +129,30 @@ export default function ChatPage({ settings, onBack }: Props) {
 
   const approveRequest = async (requestId: string) => {
     if (!sessionId) return
+    setPendingResponses((prev) => new Set(prev).add(requestId))
     try {
       await api.sendInput(settings, sessionId, {
         type: 'control_response',
         request_id: requestId,
         response: { subtype: 'approve' },
       })
-    } catch { /* ignore */ }
+    } catch {
+      setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
+    }
   }
 
   const denyRequest = async (requestId: string) => {
     if (!sessionId) return
+    setPendingResponses((prev) => new Set(prev).add(requestId))
     try {
       await api.sendInput(settings, sessionId, {
         type: 'control_response',
         request_id: requestId,
         response: { subtype: 'deny' },
       })
-    } catch { /* ignore */ }
+    } catch {
+      setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -167,7 +184,7 @@ export default function ChatPage({ settings, onBack }: Props) {
 
       <div className="messages">
         {messages.map((msg, i) => (
-          <MessageView key={i} msg={msg} onApprove={approveRequest} onDeny={denyRequest} />
+          <MessageView key={i} msg={msg} onApprove={approveRequest} onDeny={denyRequest} pendingResponses={pendingResponses} resolvedRequests={resolvedRequests} />
         ))}
         <div ref={messagesEndRef} />
       </div>
@@ -192,10 +209,12 @@ export default function ChatPage({ settings, onBack }: Props) {
   )
 }
 
-function MessageView({ msg, onApprove, onDeny }: {
+function MessageView({ msg, onApprove, onDeny, pendingResponses, resolvedRequests }: {
   msg: ChatMessage
   onApprove: (id: string) => void
   onDeny: (id: string) => void
+  pendingResponses: Set<string>
+  resolvedRequests: Map<string, boolean>
 }) {
   switch (msg.kind) {
     case 'user':
@@ -232,10 +251,12 @@ function MessageView({ msg, onApprove, onDeny }: {
         <div className="message result-msg">Cost: ${msg.cost_usd.toFixed(4)}</div>
       ) : null
 
-    case 'control_request':
+    case 'control_request': {
+      const resolved = resolvedRequests.get(msg.request_id)
+      const isPending = pendingResponses.has(msg.request_id)
       return (
         <div className="message">
-          <div className="control-request">
+          <div className={`control-request${resolved !== undefined ? ' resolved' : ''}`}>
             <div className="cr-header">Permission Required</div>
             <div className="cr-tool">{msg.tool_name}</div>
             <div className="cr-input">{formatInput(msg.input)}</div>
@@ -245,12 +266,23 @@ function MessageView({ msg, onApprove, onDeny }: {
               </div>
             )}
             <div className="cr-actions">
-              <button className="approve" onClick={() => onApprove(msg.request_id)}>Approve</button>
-              <button className="danger" onClick={() => onDeny(msg.request_id)}>Deny</button>
+              {resolved === true ? (
+                <span className="cr-status allowed">Allowed</span>
+              ) : resolved === false ? (
+                <span className="cr-status denied">Denied</span>
+              ) : isPending ? (
+                <span className="cr-status pending">Sending...</span>
+              ) : (
+                <>
+                  <button className="approve" onClick={() => onApprove(msg.request_id)}>Allow</button>
+                  <button className="danger" onClick={() => onDeny(msg.request_id)}>Deny</button>
+                </>
+              )}
             </div>
           </div>
         </div>
       )
+    }
 
     case 'system':
       return (
