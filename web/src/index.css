@@ -183,6 +183,14 @@ input:focus, textarea:focus, select:focus {
   margin: 6px 0;
   font-size: 12px;
 }
+.message .tool-use-block .tool-use-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.message .tool-use-block .tool-use-header.clickable {
+  cursor: pointer;
+}
 .message .tool-use-block .tool-name {
   font-weight: 600;
   color: var(--purple);
@@ -198,6 +206,10 @@ input:focus, textarea:focus, select:focus {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.message .tool-use-block .tool-input.collapsed {
+  max-height: 5.4em;
+  overflow: hidden;
+}
 .message .tool-result-block {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -207,12 +219,41 @@ input:focus, textarea:focus, select:focus {
   margin: 6px 0;
   font-family: var(--font-mono);
   font-size: 12px;
-  max-height: 300px;
-  overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
+.message .tool-result-block.clickable { cursor: pointer; }
 .message .tool-result-block.error { border-left-color: var(--red); }
+.message .tool-result-block .tool-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.message .tool-result-block .result-ok { color: var(--green); }
+.message .tool-result-block .result-error { color: var(--red); }
+.message .tool-result-block .tool-result-content {
+  max-height: 300px;
+  overflow-y: auto;
+}
+.message .tool-result-block .tool-result-content.collapsed {
+  max-height: 5.4em;
+  overflow: hidden;
+}
+.message .tool-result-block .expand-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 4px;
+  font-style: italic;
+}
+.chevron {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-left: 8px;
+  user-select: none;
+}
 
 .message.system-msg {
   font-size: 12px;

@@ -312,21 +312,62 @@ function ContentBlockView({ block }: { block: import('../lib/types').ContentBloc
     case 'text':
       return <div className="text-block"><AnsiText text={block.text} /></div>
     case 'tool_use':
-      return (
-        <div className="tool-use-block">
-          <div className="tool-name">{block.name}</div>
-          <div className="tool-input">{formatInput(block.input)}</div>
-        </div>
-      )
+      return <ToolUseBlock block={block} />
     case 'tool_result':
-      return (
-        <div className={`tool-result-block ${block.is_error ? 'error' : ''}`}>
-          <AnsiText text={block.content} />
-        </div>
-      )
+      return <ToolResultBlock block={block} />
     default:
       return null
   }
+}
+
+function isLongContent(text: string): boolean {
+  return text.length > 200 || text.split('\n').length > 5
+}
+
+function ToolUseBlock({ block }: { block: import('../lib/types').ContentBlock & { type: 'tool_use' } }) {
+  const inputText = formatInput(block.input)
+  const isLong = isLongContent(inputText)
+  const [expanded, setExpanded] = useState(!isLong)
+
+  return (
+    <div className="tool-use-block">
+      <div
+        className={`tool-use-header${isLong ? ' clickable' : ''}`}
+        onClick={() => isLong && setExpanded(!expanded)}
+      >
+        <span className="tool-name">{block.name}</span>
+        {isLong && <span className="chevron">{expanded ? '\u25B2' : '\u25BC'}</span>}
+      </div>
+      <div className={`tool-input${!expanded ? ' collapsed' : ''}`}>
+        {inputText}
+      </div>
+    </div>
+  )
+}
+
+function ToolResultBlock({ block }: { block: import('../lib/types').ContentBlock & { type: 'tool_result' } }) {
+  const isLong = isLongContent(block.content)
+  const [expanded, setExpanded] = useState(!isLong)
+
+  return (
+    <div
+      className={`tool-result-block${block.is_error ? ' error' : ''}${isLong ? ' clickable' : ''}`}
+      onClick={() => isLong && setExpanded(!expanded)}
+    >
+      <div className="tool-result-header">
+        <span className={block.is_error ? 'result-error' : 'result-ok'}>
+          {block.is_error ? '\u2717 Error' : '\u2713 Result'}
+        </span>
+        {isLong && <span className="chevron">{expanded ? '\u25B2' : '\u25BC'}</span>}
+      </div>
+      <div className={`tool-result-content${!expanded ? ' collapsed' : ''}`}>
+        <AnsiText text={block.content} />
+      </div>
+      {!expanded && isLong && (
+        <div className="expand-hint">Click to show more...</div>
+      )}
+    </div>
+  )
 }
 
 function formatInput(input: Record<string, unknown>): string {
