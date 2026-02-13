@@ -93,30 +93,47 @@ function parseUserMessage(d: Record<string, unknown>): ChatMessage | null {
   const msg = d.message as Record<string, unknown> | undefined;
   if (!msg) return null;
   const contentRaw = msg.content;
-  if (!Array.isArray(contentRaw) || contentRaw.length === 0) return null;
-  const firstBlock = contentRaw[0] as Record<string, unknown>;
-  if (firstBlock.type !== 'tool_result') return null;
 
-  const toolUseId = (firstBlock.tool_use_id as string) || '';
-  const contentEl = firstBlock.content;
-  let content: string;
-  if (typeof contentEl === 'string') {
-    content = contentEl;
-  } else if (Array.isArray(contentEl)) {
-    content = contentEl
-      .filter((el: Record<string, unknown>) => el.type === 'text')
-      .map((el: Record<string, unknown>) => el.text as string)
-      .join('\n');
-  } else {
-    content = contentEl != null ? JSON.stringify(contentEl) : '';
+  // content can be a plain string
+  if (typeof contentRaw === 'string') {
+    return { kind: 'user', content: contentRaw };
   }
 
-  return {
-    kind: 'tool_result_event',
-    tool_use_id: toolUseId,
-    content,
-    is_error: !!firstBlock.is_error,
-  };
+  if (!Array.isArray(contentRaw) || contentRaw.length === 0) return null;
+  const firstBlock = contentRaw[0] as Record<string, unknown>;
+
+  // Tool result content block → pair with assistant message
+  if (firstBlock.type === 'tool_result') {
+    const toolUseId = (firstBlock.tool_use_id as string) || '';
+    const contentEl = firstBlock.content;
+    let content: string;
+    if (typeof contentEl === 'string') {
+      content = contentEl;
+    } else if (Array.isArray(contentEl)) {
+      content = contentEl
+        .filter((el: Record<string, unknown>) => el.type === 'text')
+        .map((el: Record<string, unknown>) => el.text as string)
+        .join('\n');
+    } else {
+      content = contentEl != null ? JSON.stringify(contentEl) : '';
+    }
+    return {
+      kind: 'tool_result_event',
+      tool_use_id: toolUseId,
+      content,
+      is_error: !!firstBlock.is_error,
+    };
+  }
+
+  // Regular user text message
+  const textParts = contentRaw
+    .filter((el: Record<string, unknown>) => el.type === 'text')
+    .map((el: Record<string, unknown>) => (el.text as string) || '');
+  if (textParts.length > 0) {
+    return { kind: 'user', content: textParts.join('\n') };
+  }
+
+  return null;
 }
 
 function parseContentBlocks(raw: unknown): ContentBlock[] {

@@ -105,6 +105,8 @@ export default function ChatPage({ settings, onBack }: Props) {
             setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
             return
           }
+          // Skip server-echoed user text messages during live SSE (we already added them locally on send)
+          if (msg.kind === 'user') return
           // For assistant messages: replace last if streaming, else append
           setMessages((prev) => {
             if (msg.kind === 'tool_result_event') {
