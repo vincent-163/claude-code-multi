@@ -52,80 +52,80 @@ export default function ChatPage({ settings, onBack }: Props) {
 
     let sseCleanup: (() => void) | undefined
 
-    ;(async () => {
-      try {
-        const data = await api.getSession(settings, sessionId, 1000)
-        setStatus(data.status)
-        if (data.total_cost_usd) setCost(data.total_cost_usd)
+      ; (async () => {
+        try {
+          const data = await api.getSession(settings, sessionId, 1000)
+          setStatus(data.status)
+          if (data.total_cost_usd) setCost(data.total_cost_usd)
 
-        // Parse history
-        const historyMsgs: ChatMessage[] = []
-        const historyResolved = new Map<string, boolean>()
-        for (const evt of data.history) {
-          if (evt.id > lastEventIdRef.current) lastEventIdRef.current = evt.id
-          const msg = parseEvent(evt)
-          if (msg) {
-            if (msg.kind === 'status') {
-              setStatus(msg.status as SessionStatus)
-            } else if (msg.kind === 'result' && msg.total_cost_usd) {
-              setCost(msg.total_cost_usd)
-            } else if (msg.kind === 'control_response') {
-              historyResolved.set(msg.request_id, msg.approved)
-            } else if (msg.kind === 'tool_result_event') {
-              historyMsgs.splice(0, historyMsgs.length, ...pairToolResult(historyMsgs, msg.tool_use_id, msg.content, msg.is_error))
-            } else {
-              historyMsgs.push(msg)
-            }
-          }
-        }
-        setResolvedRequests(historyResolved)
-        setMessages(historyMsgs)
-      } catch {
-        setSseError('Failed to load session')
-      }
-
-      // Connect SSE
-      sseCleanup = connectSse(
-        settings,
-        sessionId,
-        lastEventIdRef.current,
-        (evt) => {
-          lastEventIdRef.current = evt.id
-          const msg = parseEvent(evt)
-          if (!msg) return
-          if (msg.kind === 'status') {
-            setStatus(msg.status as SessionStatus)
-            return
-          }
-          if (msg.kind === 'result' && msg.total_cost_usd) {
-            setCost(msg.total_cost_usd)
-          }
-          if (msg.kind === 'control_response') {
-            setResolvedRequests((prev) => new Map(prev).set(msg.request_id, msg.approved))
-            setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
-            return
-          }
-          // Skip server-echoed user text messages during live SSE (we already added them locally on send)
-          if (msg.kind === 'user') return
-          // For assistant messages: replace last if streaming, else append
-          setMessages((prev) => {
-            if (msg.kind === 'tool_result_event') {
-              return pairToolResult(prev, msg.tool_use_id, msg.content, msg.is_error)
-            }
-            if (msg.kind === 'assistant') {
-              const last = prev[prev.length - 1]
-              if (last?.kind === 'assistant' && last.streaming) {
-                return [...prev.slice(0, -1), msg]
+          // Parse history
+          const historyMsgs: ChatMessage[] = []
+          const historyResolved = new Map<string, boolean>()
+          for (const evt of data.history) {
+            if (evt.id > lastEventIdRef.current) lastEventIdRef.current = evt.id
+            const msg = parseEvent(evt)
+            if (msg) {
+              if (msg.kind === 'status') {
+                setStatus(msg.status as SessionStatus)
+              } else if (msg.kind === 'result' && msg.total_cost_usd) {
+                setCost(msg.total_cost_usd)
+              } else if (msg.kind === 'control_response') {
+                historyResolved.set(msg.request_id, msg.approved)
+              } else if (msg.kind === 'tool_result_event') {
+                historyMsgs.splice(0, historyMsgs.length, ...pairToolResult(historyMsgs, msg.tool_use_id, msg.content, msg.is_error))
+              } else {
+                historyMsgs.push(msg)
               }
             }
-            return [...prev, msg]
-          })
-        },
-        (err) => {
-          setSseError(err instanceof Error ? err.message : 'SSE connection lost')
-        },
-      )
-    })()
+          }
+          setResolvedRequests(historyResolved)
+          setMessages(historyMsgs)
+        } catch {
+          setSseError('Failed to load session')
+        }
+
+        // Connect SSE
+        sseCleanup = connectSse(
+          settings,
+          sessionId,
+          lastEventIdRef.current,
+          (evt) => {
+            lastEventIdRef.current = evt.id
+            const msg = parseEvent(evt)
+            if (!msg) return
+            if (msg.kind === 'status') {
+              setStatus(msg.status as SessionStatus)
+              return
+            }
+            if (msg.kind === 'result' && msg.total_cost_usd) {
+              setCost(msg.total_cost_usd)
+            }
+            if (msg.kind === 'control_response') {
+              setResolvedRequests((prev) => new Map(prev).set(msg.request_id, msg.approved))
+              setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
+              return
+            }
+            // Skip server-echoed user text messages during live SSE (we already added them locally on send)
+            if (msg.kind === 'user') return
+            // For assistant messages: replace last if streaming, else append
+            setMessages((prev) => {
+              if (msg.kind === 'tool_result_event') {
+                return pairToolResult(prev, msg.tool_use_id, msg.content, msg.is_error)
+              }
+              if (msg.kind === 'assistant') {
+                const last = prev[prev.length - 1]
+                if (last?.kind === 'assistant' && last.streaming) {
+                  return [...prev.slice(0, -1), msg]
+                }
+              }
+              return [...prev, msg]
+            })
+          },
+          (err) => {
+            setSseError(err instanceof Error ? err.message : 'SSE connection lost')
+          },
+        )
+      })()
 
     return () => { sseCleanup?.() }
   }, [sessionId, settings])
@@ -154,13 +154,26 @@ export default function ChatPage({ settings, onBack }: Props) {
 
   const approveRequest = async (requestId: string) => {
     if (!sessionId) return
+    // Find the original control_request to get the input for updatedInput
+    const controlMsg = messages.find(
+      (m) => m.kind === 'control_request' && m.request_id === requestId
+    ) as (ChatMessage & { kind: 'control_request' }) | undefined
     setPendingResponses((prev) => new Set(prev).add(requestId))
     try {
       await api.sendInput(settings, sessionId, {
         type: 'control_response',
-        request_id: requestId,
-        response: { subtype: 'approve' },
+        response: {
+          subtype: 'success',
+          request_id: requestId,
+          response: {
+            behavior: 'allow',
+            updatedInput: controlMsg?.input || {},
+          },
+        },
       })
+      // Optimistically mark as resolved since CLI may not echo back a confirmation
+      setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
+      setResolvedRequests((prev) => new Map(prev).set(requestId, true))
     } catch {
       setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
     }
@@ -172,9 +185,18 @@ export default function ChatPage({ settings, onBack }: Props) {
     try {
       await api.sendInput(settings, sessionId, {
         type: 'control_response',
-        request_id: requestId,
-        response: { subtype: 'deny' },
+        response: {
+          subtype: 'success',
+          request_id: requestId,
+          response: {
+            behavior: 'deny',
+            message: 'User denied permission',
+          },
+        },
       })
+      // Optimistically mark as resolved
+      setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
+      setResolvedRequests((prev) => new Map(prev).set(requestId, false))
     } catch {
       setPendingResponses((prev) => { const next = new Set(prev); next.delete(requestId); return next })
     }

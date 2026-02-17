@@ -28,7 +28,6 @@ export function parseEvent(evt: BufferedEvent): ChatMessage | null {
 
 function parseMessageEvent(d: Record<string, unknown>): ChatMessage | null {
   const type = d.type as string;
-  const subtype = d.subtype as string | undefined;
 
   if (type === 'system') {
     return { kind: 'system', data: d };
@@ -51,15 +50,18 @@ function parseMessageEvent(d: Record<string, unknown>): ChatMessage | null {
     };
   }
 
-  if (type === 'control_request' && subtype === 'can_use_tool') {
+  if (type === 'control_request') {
     const req = d.request as Record<string, unknown> | undefined;
-    return {
-      kind: 'control_request',
-      request_id: (d.request_id as string) || '',
-      tool_name: (req?.tool_name as string) || '',
-      input: (req?.input as Record<string, unknown>) || {},
-      blocked_path: req?.blocked_path as string | undefined,
-    };
+    const reqSubtype = req?.subtype as string | undefined;
+    if (reqSubtype === 'can_use_tool') {
+      return {
+        kind: 'control_request',
+        request_id: (d.request_id as string) || '',
+        tool_name: (req?.tool_name as string) || '',
+        input: (req?.input as Record<string, unknown>) || {},
+        blocked_path: req?.blocked_path as string | undefined,
+      };
+    }
   }
 
   if (type === 'control_response') {
