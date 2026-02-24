@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Config } from './config';
 import { logger } from './logger';
+import type { Scheduler } from './scheduler';
 
 export type SessionStatus = 'starting' | 'ready' | 'busy' | 'waiting_for_input' | 'dead';
 
@@ -17,6 +18,12 @@ export interface BufferedEvent {
 
 export type SSESubscriber = (event: BufferedEvent) => void;
 
+const MCP_SERVER_NAME = 'cc-app';
+const MCP_TOOL_SET_TITLE = 'set_session_title';
+const MCP_TOOL_SCHEDULE_TASK = 'schedule_task';
+const MCP_TOOL_LIST_SCHEDULES = 'list_schedules';
+const MCP_TOOL_DELETE_SCHEDULE = 'delete_schedule';
+
 export class Session {
   id: string;
   readonly createdAt: number;
@@ -28,6 +35,12 @@ export class Session {
   title: string | undefined;
 
   totalCostUsd: number = 0;
+
+  /** Called when the title is changed via MCP tool */
+  onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
+
+  /** Scheduler instance for schedule MCP tools */
+  scheduler: Scheduler | null = null;
 
   /** Resolves when the CLI emits its system init message with session_id */
   readonly cliSessionIdReady: Promise<string>;
@@ -91,6 +104,13 @@ export class Session {
             this.onCliSessionId?.(this.id, newCliId);
             this.resolveCliSessionId(newCliId);
           }
+
+          // Intercept MCP control requests from CLI and handle them
+          if (parsed.type === 'control_request' && parsed.request?.subtype === 'mcp_message') {
+            this.handleMcpControlRequest(parsed);
+            return; // Don't forward to clients
+          }
+
           // Track session status from CLI message types
           this.updateStatusFromMessage(parsed);
           this.pushEvent('message', parsed);
@@ -324,6 +344,167 @@ export class Session {
     }
   }
 
+  private handleMcpControlRequest(parsed: Record<string, unknown>): void {
+    const requestId = parsed.request_id as string;
+    const request = parsed.request as Record<string, unknown>;
+    const serverName = request.server_name as string;
+    const message = request.message as Record<string, unknown>;
+
+    if (serverName !== MCP_SERVER_NAME || !message) {
+      this.sendMcpError(requestId, message?.id as number, `Unknown MCP server: ${serverName}`);
+      return;
+    }
+
+    const method = message.method as string;
+    const params = (message.params || {}) as Record<string, unknown>;
+    let mcpResponse: Record<string, unknown>;
+
+    if (method === 'initialize') {
+      mcpResponse = {
+        jsonrpc: '2.0', id: message.id,
+        result: {
+          protocolVersion: '2024-11-05',
+          capabilities: { tools: {} },
+          serverInfo: { name: MCP_SERVER_NAME, version: '1.0.0' },
+        },
+      };
+    } else if (method === 'notifications/initialized') {
+      mcpResponse = { jsonrpc: '2.0', result: {} };
+    } else if (method === 'tools/list') {
+      mcpResponse = {
+        jsonrpc: '2.0', id: message.id,
+        result: {
+          tools: [{
+            name: MCP_TOOL_SET_TITLE,
+            description: 'Set the title for this session. Call this after the first user message of every conversation or when conversation topic changes to give the session a short, descriptive title.',
+            inputSchema: {
+              type: 'object',
+              properties: { title: { type: 'string', description: 'Short descriptive title for the session' } },
+              required: ['title'],
+            },
+          }, {
+            name: MCP_TOOL_SCHEDULE_TASK,
+            description: 'Schedule a Claude Code session to run at a future time. The session will be launched with the given prompt as the first user message at the specified time.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                prompt: { type: 'string', description: 'The prompt/task to send as the first user message' },
+                working_directory: { type: 'string', description: 'Absolute path to the working directory for the scheduled session' },
+                scheduled_at: { type: 'string', description: 'ISO 8601 datetime string for when to run (e.g. "2026-02-25T09:00:00Z")' },
+              },
+              required: ['prompt', 'working_directory', 'scheduled_at'],
+            },
+          }, {
+            name: MCP_TOOL_LIST_SCHEDULES,
+            description: 'List all scheduled tasks. Only shows tasks whose working directory is under this session\'s working directory.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+            },
+          }, {
+            name: MCP_TOOL_DELETE_SCHEDULE,
+            description: 'Delete a pending scheduled task by its ID.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'The ID of the scheduled task to delete' },
+              },
+              required: ['id'],
+            },
+          }],
+        },
+      };
+    } else if (method === 'tools/call') {
+      const toolName = params.name as string;
+      const args = (params.arguments || {}) as Record<string, unknown>;
+      if (toolName === MCP_TOOL_SET_TITLE && typeof args.title === 'string') {
+        this.title = args.title;
+        this.onTitleChanged?.(this.id, args.title);
+        this.pushEvent('title_changed', { title: args.title });
+        logger.info(`Session ${this.id} title set to: ${args.title}`);
+        mcpResponse = {
+          jsonrpc: '2.0', id: message.id,
+          result: { content: [{ type: 'text', text: `Title set to: ${args.title}` }] },
+        };
+      } else if (toolName === MCP_TOOL_SCHEDULE_TASK && this.scheduler) {
+        const prompt = args.prompt as string;
+        const workDir = args.working_directory as string;
+        const scheduledAt = args.scheduled_at as string;
+        if (!prompt || !workDir || !scheduledAt) {
+          mcpResponse = {
+            jsonrpc: '2.0', id: message.id,
+            error: { code: -32602, message: 'prompt, working_directory, and scheduled_at are required' },
+          };
+        } else {
+          try {
+            const task = this.scheduler.add(prompt, workDir, scheduledAt);
+            mcpResponse = {
+              jsonrpc: '2.0', id: message.id,
+              result: { content: [{ type: 'text', text: `Scheduled task ${task.id} for ${task.scheduled_at}` }] },
+            };
+            logger.info(`Session ${this.id} scheduled task ${task.id} for ${scheduledAt}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            mcpResponse = {
+              jsonrpc: '2.0', id: message.id,
+              error: { code: -32000, message: `Failed to schedule: ${msg}` },
+            };
+          }
+        }
+      } else if (toolName === MCP_TOOL_LIST_SCHEDULES && this.scheduler) {
+        const tasks = this.scheduler.list(this.workingDirectory);
+        mcpResponse = {
+          jsonrpc: '2.0', id: message.id,
+          result: { content: [{ type: 'text', text: JSON.stringify(tasks, null, 2) }] },
+        };
+      } else if (toolName === MCP_TOOL_DELETE_SCHEDULE && this.scheduler) {
+        const taskId = args.id as string;
+        if (!taskId) {
+          mcpResponse = {
+            jsonrpc: '2.0', id: message.id,
+            error: { code: -32602, message: 'id is required' },
+          };
+        } else {
+          const deleted = this.scheduler.delete(taskId, this.workingDirectory);
+          mcpResponse = {
+            jsonrpc: '2.0', id: message.id,
+            result: { content: [{ type: 'text', text: deleted ? `Deleted schedule ${taskId}` : `Schedule ${taskId} not found or not deletable (must be pending and under this working directory)` }] },
+          };
+        }
+      } else {
+        mcpResponse = {
+          jsonrpc: '2.0', id: message.id,
+          error: { code: -32601, message: `Unknown tool: ${toolName}` },
+        };
+      }
+    } else {
+      mcpResponse = {
+        jsonrpc: '2.0', id: message.id,
+        error: { code: -32601, message: `Method '${method}' not supported` },
+      };
+    }
+
+    this.sendStreamJsonMessage({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: { mcp_response: mcpResponse },
+      },
+    });
+  }
+
+  private sendMcpError(requestId: string, messageId: unknown, error: string): void {
+    this.sendStreamJsonMessage({
+      type: 'control_response',
+      response: {
+        subtype: 'error',
+        request_id: requestId,
+        error,
+      },
+    });
+  }
+
   private updateStatusFromMessage(parsed: Record<string, unknown>): void {
     const type = parsed.type as string | undefined;
     if (!type) return;
@@ -397,6 +578,7 @@ export class SessionManager {
   private config: Config;
   private sessionsDir: string;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  scheduler: Scheduler | null = null;
 
   constructor(config: Config, sessionsDir: string) {
     this.config = config;
@@ -457,6 +639,7 @@ export class SessionManager {
       '--verbose',
       '--replay-user-messages',
       '--permission-prompt-tool', 'stdio',
+      '--mcp-config', JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'sdk', name: MCP_SERVER_NAME } } }),
     ];
 
     if (opts.model) {
@@ -485,7 +668,13 @@ export class SessionManager {
     });
 
     session.attach(proc);
+    session.scheduler = this.scheduler;
     this.sessions.set(sessionId, session);
+
+    // Wire up title change callback to persist to JSONL
+    session.onTitleChanged = (sid, title) => {
+      this.updateSessionTitle(sid, title);
+    };
 
     // Send initialize control request required by --permission-prompt-tool-name stdio
     session.sendStreamJsonMessage({
@@ -615,6 +804,7 @@ export class SessionManager {
       '--verbose',
       '--replay-user-messages',
       '--permission-prompt-tool', 'stdio',
+      '--mcp-config', JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'sdk', name: MCP_SERVER_NAME } } }),
       '--resume', meta.cliSessionId,
     ];
 
@@ -639,7 +829,13 @@ export class SessionManager {
     });
 
     session.attach(proc);
+    session.scheduler = this.scheduler;
     this.sessions.set(sessionId, session);
+
+    // Wire up title change callback to persist to JSONL
+    session.onTitleChanged = (sid, title) => {
+      this.updateSessionTitle(sid, title);
+    };
 
     // Send initialize control request
     session.sendStreamJsonMessage({

@@ -2,6 +2,7 @@ import express from 'express';
 import { loadConfig } from './config';
 import { setLogLevel, logger } from './logger';
 import { SessionManager } from './session';
+import { Scheduler } from './scheduler';
 import { authMiddleware } from './auth';
 import { createRoutes } from './routes';
 
@@ -12,6 +13,13 @@ setLogLevel(config.logLevel);
 
 const sessionsDir = path.resolve(config.sessionsDir);
 const manager = new SessionManager(config, sessionsDir);
+
+// Initialize scheduler with SQLite DB in sessions directory
+const schedulerDbPath = path.join(sessionsDir, 'scheduler.db');
+const scheduler = new Scheduler(schedulerDbPath, manager);
+manager.scheduler = scheduler;
+scheduler.start(5000);
+
 const app = express();
 
 app.use(express.json());
@@ -36,6 +44,7 @@ app.get('*', (_req, res) => {
 // Graceful shutdown
 async function shutdown(signal: string) {
   logger.info(`Received ${signal}, shutting down...`);
+  scheduler.stop();
   manager.shutdown();
   await manager.destroyAll();
   logger.info('All sessions destroyed, exiting.');

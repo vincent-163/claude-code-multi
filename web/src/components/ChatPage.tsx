@@ -99,6 +99,14 @@ export default function ChatPage({ settings, onBack }: Props) {
           const historyPlanExits = new Set<string>()
           for (const evt of data.history) {
             if (evt.id > lastEventIdRef.current) lastEventIdRef.current = evt.id
+
+            // Handle title_changed in history
+            if (evt.event === 'title_changed') {
+              const d = evt.data as Record<string, unknown>
+              if (typeof d.title === 'string') setTitle(d.title)
+              continue
+            }
+
             const msgs = parseEvents(evt)
             for (const msg of msgs) {
               if (msg.kind === 'status') {
@@ -143,6 +151,14 @@ export default function ChatPage({ settings, onBack }: Props) {
           lastEventIdRef.current,
           (evt) => {
             lastEventIdRef.current = evt.id
+
+            // Handle title_changed event from MCP tool
+            if (evt.event === 'title_changed') {
+              const d = evt.data as Record<string, unknown>
+              if (typeof d.title === 'string') setTitle(d.title)
+              return
+            }
+
             const msgs = parseEvents(evt)
             for (const msg of msgs) {
               if (!msg) continue
