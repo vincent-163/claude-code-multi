@@ -376,7 +376,7 @@ export class Session {
         result: {
           tools: [{
             name: MCP_TOOL_SET_TITLE,
-            description: 'Set the title for this session. Call this after the first user message of every conversation or when conversation topic changes to give the session a short, descriptive title.',
+            description: 'Set the title for this session. MANDATORY: You MUST call this tool immediately after receiving the very first user message in every session — no exceptions. Do NOT skip this step. Do NOT wait for a second message. Also call it when the conversation topic changes significantly. The title should be a short, descriptive summary (3-8 words) of what the user is asking about.',
             inputSchema: {
               type: 'object',
               properties: { title: { type: 'string', description: 'Short descriptive title for the session' } },
@@ -651,9 +651,11 @@ export class SessionManager {
     if (opts.permissionMode) {
       args.push('--permission-mode', opts.permissionMode);
     }
-    if (opts.systemPrompt) {
-      args.push('--system-prompt', opts.systemPrompt);
-    }
+    const titleInstruction = 'IMPORTANT: After receiving the first user message, you MUST immediately call the set_session_title MCP tool to give this session a short descriptive title (3-8 words). Do this BEFORE doing anything else. Never skip this step.';
+    const systemPrompt = opts.systemPrompt
+      ? `${opts.systemPrompt}\n\n${titleInstruction}`
+      : titleInstruction;
+    args.push('--system-prompt', systemPrompt);
     if (opts.additionalFlags) {
       args.push(...opts.additionalFlags);
     }
