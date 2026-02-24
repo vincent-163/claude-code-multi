@@ -40,6 +40,9 @@ class ChatViewModel(
     private val _totalCost = MutableStateFlow(0.0)
     val totalCost: StateFlow<Double> = _totalCost.asStateFlow()
 
+    private val _title = MutableStateFlow<String?>(null)
+    val title: StateFlow<String?> = _title.asStateFlow()
+
     private var lastEventId: Long? = null
     private var sseJob: Job? = null
 
@@ -67,6 +70,7 @@ class ChatViewModel(
             apiClient.getSession(sessionId).fold(
                 onSuccess = { detail ->
                     _sessionStatus.value = detail.status ?: "unknown"
+                    _title.value = detail.title
                     // Parse history events and populate messages
                     val historyMessages = mutableListOf<ChatMessage>()
                     for (historyEvent in detail.rawHistory) {
@@ -360,6 +364,14 @@ class ChatViewModel(
     fun sendToolResult(response: String) {
         viewModelScope.launch {
             apiClient.sendInput(sessionId, "tool_result", response)
+        }
+    }
+
+    fun updateTitle(newTitle: String) {
+        val trimmed = newTitle.trim()
+        _title.value = trimmed.ifEmpty { null }
+        viewModelScope.launch {
+            apiClient.updateSessionTitle(sessionId, trimmed)
         }
     }
 

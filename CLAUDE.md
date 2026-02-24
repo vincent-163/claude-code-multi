@@ -32,7 +32,7 @@ android/app/src/main/java/com/claudecode/app/
       SshConfig.kt           # SSH + direct API connection config
 
   network/
-    ApiClient.kt             # OkHttp REST client: createSession, listSessions, getSession, sendInput, sendControlResponse, sendToolResult, deleteSession, healthCheck
+    ApiClient.kt             # OkHttp REST client: createSession, listSessions, getSession, sendInput, sendControlResponse, sendToolResult, updateSessionTitle, deleteSession, healthCheck
     SseClient.kt             # SSE stream parser -> Flow<SseEvent>; parses system/assistant/result/status/exit/error/control_request/AskUserQuestion/PlanModeExit events
 
   ssh/
@@ -48,8 +48,8 @@ android/app/src/main/java/com/claudecode/app/
       SessionsScreen.kt      # Session list + NewSessionDialog (currently only working_directory field)
       SessionsViewModel.kt   # List/create/delete sessions via ApiClient
     chat/
-      ChatScreen.kt          # Chat UI: message list, input bar, renders text/tool_use/results/permission approvals/AskUserQuestion interactive options/PlanModeExit approval
-      ChatViewModel.kt       # SSE subscription, message accumulation, sendMessage/approveControlRequest/denyControlRequest/answerQuestion/approvePlanExit/sendInterrupt
+      ChatScreen.kt          # Chat UI: message list, input bar, renders text/tool_use/results/permission approvals/AskUserQuestion interactive options/PlanModeExit approval/editable session title
+      ChatViewModel.kt       # SSE subscription, message accumulation, sendMessage/approveControlRequest/denyControlRequest/answerQuestion/approvePlanExit/updateTitle/sendInterrupt
     settings/
       SettingsScreen.kt      # Auth token, default model, working dir, server command fields
       SettingsViewModel.kt   # Read/write settings via SettingsRepository
@@ -69,7 +69,7 @@ web/src/                     # React/TypeScript web SPA
     ansi.ts                # ANSI escape code parser
     settings.ts            # Settings persistence to localStorage
   components/
-    ChatPage.tsx           # Chat UI: message list, input bar, control_request approval, AskUserQuestion interactive UI, ExitPlanMode approval
+    ChatPage.tsx           # Chat UI: message list, input bar, control_request approval, AskUserQuestion interactive UI, ExitPlanMode approval, editable session title
     SessionsPage.tsx       # Session list + create dialog
     SettingsPage.tsx       # API URL, auth token, default model settings
     AnsiText.tsx           # ANSI-aware text renderer

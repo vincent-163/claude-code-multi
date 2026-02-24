@@ -40,6 +40,10 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [resolvedRequests, setResolvedRequests] = useState<Map<string, boolean>>(new Map())
   const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(new Set())
   const [resolvedPlanExits, setResolvedPlanExits] = useState<Set<string>>(new Set())
+  const [title, setTitle] = useState<string | undefined>(undefined)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [editTitleValue, setEditTitleValue] = useState('')
+  const titleInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastEventIdRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -47,6 +51,33 @@ export default function ChatPage({ settings, onBack }: Props) {
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [])
+
+  useEffect(() => {
+    if (editingTitle && titleInputRef.current) {
+      titleInputRef.current.focus()
+      titleInputRef.current.select()
+    }
+  }, [editingTitle])
+
+  const startEditingTitle = () => {
+    setEditTitleValue(title || '')
+    setEditingTitle(true)
+  }
+
+  const commitTitle = async () => {
+    const trimmed = editTitleValue.trim()
+    setEditingTitle(false)
+    if (!sessionId) return
+    try {
+      await api.updateSessionTitle(settings, sessionId, trimmed)
+      setTitle(trimmed || undefined)
+    } catch { /* ignore */ }
+  }
+
+  const handleTitleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') commitTitle()
+    else if (e.key === 'Escape') setEditingTitle(false)
+  }
 
   // Load history + connect SSE
   useEffect(() => {
@@ -58,6 +89,7 @@ export default function ChatPage({ settings, onBack }: Props) {
         try {
           const data = await api.getSession(settings, sessionId, 1000)
           setStatus(data.status)
+          if (data.title) setTitle(data.title)
           if (data.total_cost_usd) setCost(data.total_cost_usd)
 
           // Parse history
@@ -285,7 +317,20 @@ export default function ChatPage({ settings, onBack }: Props) {
       <div className="chat-header">
         <button className="back" onClick={onBack}>&larr;</button>
         <div className="session-info">
-          <div className="title">{sessionId}</div>
+          {editingTitle ? (
+            <input
+              ref={titleInputRef}
+              className="title-edit"
+              value={editTitleValue}
+              onChange={(e) => setEditTitleValue(e.target.value)}
+              onKeyDown={handleTitleKeyDown}
+              onBlur={commitTitle}
+            />
+          ) : (
+            <div className="title" onClick={startEditingTitle} style={{ cursor: 'pointer' }} title="Click to rename">
+              {title || sessionId}
+            </div>
+          )}
           <div className="subtitle">{cost > 0 ? `$${cost.toFixed(4)}` : ''}</div>
         </div>
         <span className="status-badge" style={statusBadgeStyle}>{status}</span>

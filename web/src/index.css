@@ -159,7 +159,18 @@ input:focus, textarea:focus, select:focus {
 }
 .chat-header .back { font-size: 18px; background: none; border: none; padding: 4px 8px; }
 .chat-header .session-info { flex: 1; min-width: 0; }
-.chat-header .session-info .title { font-size: 14px; font-weight: 600; }
+.chat-header .session-info .title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-header .session-info .title:hover { color: var(--accent); }
+.chat-header .session-info .title-edit {
+  font-size: 14px; font-weight: 600;
+  padding: 1px 4px;
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text);
+  outline: none;
+}
 .chat-header .session-info .subtitle { font-size: 11px; color: var(--text-dim); }
 .chat-header .status-badge {
   font-size: 11px;

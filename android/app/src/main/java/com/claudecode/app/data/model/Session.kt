@@ -7,7 +7,8 @@ data class Session(
     val lastActiveAt: Double? = null,
     val workingDirectory: String,
     val pid: Int? = null,
-    val totalCostUsd: Double? = null
+    val totalCostUsd: Double? = null,
+    val title: String? = null
 )
 
 enum class SessionStatus {

@@ -45,6 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -97,7 +98,10 @@ fun ChatScreen(
     val isConnected by viewModel.isConnected.collectAsState()
     val modelName by viewModel.modelName.collectAsState()
     val totalCost by viewModel.totalCost.collectAsState()
+    val title by viewModel.title.collectAsState()
     var inputText by remember { mutableStateOf("") }
+    var editingTitle by remember { mutableStateOf(false) }
+    var editTitleValue by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     LaunchedEffect(messages.size) {
@@ -111,28 +115,62 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                modelName ?: viewModel.sessionId.take(12),
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Icon(
-                                Icons.Default.Circle,
-                                contentDescription = null,
-                                modifier = Modifier.size(8.dp),
-                                tint = when {
-                                    isBusy -> AccentOrange
-                                    sessionStatus in listOf("ready", "connected", "running") -> AccentGreen
-                                    else -> AccentRed
+                        if (editingTitle) {
+                            TextField(
+                                value = editTitleValue,
+                                onValueChange = { editTitleValue = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.titleMedium,
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                    focusedIndicatorColor = AccentBlue,
+                                ),
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    Row {
+                                        IconButton(onClick = {
+                                            viewModel.updateTitle(editTitleValue)
+                                            editingTitle = false
+                                        }) {
+                                            Icon(Icons.Default.Check, contentDescription = "Save", tint = AccentGreen)
+                                        }
+                                        IconButton(onClick = { editingTitle = false }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = AccentRed)
+                                        }
+                                    }
                                 }
                             )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                if (isBusy) "busy" else sessionStatus,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextSecondary
-                            )
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.clickable {
+                                    editTitleValue = title ?: ""
+                                    editingTitle = true
+                                }
+                            ) {
+                                Text(
+                                    title ?: modelName ?: viewModel.sessionId.take(12),
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(
+                                    Icons.Default.Circle,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(8.dp),
+                                    tint = when {
+                                        isBusy -> AccentOrange
+                                        sessionStatus in listOf("ready", "connected", "running") -> AccentGreen
+                                        else -> AccentRed
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    if (isBusy) "busy" else sessionStatus,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
+                                )
+                            }
                         }
                         if (totalCost > 0) {
                             Text(

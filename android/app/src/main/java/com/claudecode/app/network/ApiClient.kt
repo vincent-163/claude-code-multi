@@ -294,6 +294,27 @@ class ApiClient {
         }
     }
 
+    suspend fun updateSessionTitle(sessionId: String, title: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val body = JsonObject().apply { addProperty("title", title) }
+            val request = authHeader(
+                Request.Builder()
+                    .url("$baseUrl/sessions/$sessionId")
+                    .patch(body.toString().toRequestBody(jsonMediaType))
+            ).build()
+
+            val response = shortClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    RuntimeException("HTTP ${response.code}: ${response.message}")
+                )
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     fun getStreamUrl(sessionId: String): String {
         return "$baseUrl/sessions/$sessionId/stream"
     }
@@ -319,7 +340,8 @@ private data class SessionResponse(
     @SerializedName("last_active_at") val lastActiveAt: Double?,
     @SerializedName("working_directory") val workingDirectory: String?,
     val pid: Int?,
-    @SerializedName("total_cost_usd") val totalCostUsd: Double?
+    @SerializedName("total_cost_usd") val totalCostUsd: Double?,
+    val title: String?
 ) {
     fun toSession() = Session(
         id = id,
@@ -328,7 +350,8 @@ private data class SessionResponse(
         lastActiveAt = lastActiveAt,
         workingDirectory = workingDirectory ?: "",
         pid = pid,
-        totalCostUsd = totalCostUsd
+        totalCostUsd = totalCostUsd,
+        title = title
     )
 }
 
@@ -340,6 +363,7 @@ data class SessionDetailResponse(
     @SerializedName("working_directory") val workingDirectory: String?,
     val pid: Int?,
     @SerializedName("total_cost_usd") val totalCostUsd: Double?,
+    val title: String?,
     val history: List<Map<String, Any>>?,
     @Transient val rawHistory: List<JsonObject> = emptyList()
 ) {
@@ -350,6 +374,7 @@ data class SessionDetailResponse(
         lastActiveAt = lastActiveAt,
         workingDirectory = workingDirectory ?: "",
         pid = pid,
-        totalCostUsd = totalCostUsd
+        totalCostUsd = totalCostUsd,
+        title = title
     )
 }
