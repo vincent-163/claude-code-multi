@@ -50,6 +50,14 @@ class ChatViewModel(
     private val _pendingControlResponses = MutableStateFlow<Set<String>>(emptySet())
     val pendingControlResponses: StateFlow<Set<String>> = _pendingControlResponses.asStateFlow()
 
+    // Track answered AskUserQuestion tool_use_ids
+    private val _answeredQuestions = MutableStateFlow<Set<String>>(emptySet())
+    val answeredQuestions: StateFlow<Set<String>> = _answeredQuestions.asStateFlow()
+
+    // Track resolved PlanModeExit tool_use_ids
+    private val _resolvedPlanExits = MutableStateFlow<Set<String>>(emptySet())
+    val resolvedPlanExits: StateFlow<Set<String>> = _resolvedPlanExits.asStateFlow()
+
     init {
         loadHistoryAndConnect()
     }
@@ -66,14 +74,15 @@ class ChatViewModel(
                         val eventId = historyEvent.get("id")?.asLong
                         val data = historyEvent.get("data")?.asJsonObject ?: continue
 
-                        val sseEvent = if (eventType == "message") {
+                        val sseEvents = if (eventType == "message") {
                             val type = data.get("type")?.asString ?: continue
-                            SseClient.parseMessageEvent(type, data, eventId)
+                            SseClient.parseMessageEvents(type, data, eventId)
                         } else {
-                            SseClient.parseEvent(eventType, Gson().toJson(data), eventId)
+                            val single = SseClient.parseEvent(eventType, Gson().toJson(data), eventId)
+                            if (single != null) listOf(single) else emptyList()
                         }
 
-                        if (sseEvent != null) {
+                        for (sseEvent in sseEvents) {
                             eventId?.let { lastEventId = it }
                             processEventToMessages(sseEvent, historyMessages)
                         }
@@ -124,8 +133,27 @@ class ChatViewModel(
             }
             is SseEvent.UserMessage -> {
                 if (event.isToolResult) {
-                    // Attach tool result to the matching ToolUse block in the last AssistantMessage
+                    // Check if this tool result is for an AskUserQuestion
                     val toolUseId = event.toolUseId ?: ""
+                    val isAuqResponse = messages.any { it is ChatMessage.AskUserQuestion && it.toolUseId == toolUseId }
+                    if (isAuqResponse) {
+                        _answeredQuestions.value = _answeredQuestions.value + toolUseId
+                        // Mark the AskUserQuestion message as answered
+                        val idx = messages.indexOfFirst { it is ChatMessage.AskUserQuestion && it.toolUseId == toolUseId }
+                        if (idx >= 0) {
+                            messages[idx] = (messages[idx] as ChatMessage.AskUserQuestion).copy(answered = true)
+                        }
+                    }
+                    // Check if this tool result is for a PlanModeExit
+                    val isPlanExitResponse = messages.any { it is ChatMessage.PlanModeExit && it.toolUseId == toolUseId }
+                    if (isPlanExitResponse) {
+                        _resolvedPlanExits.value = _resolvedPlanExits.value + toolUseId
+                        val idx = messages.indexOfFirst { it is ChatMessage.PlanModeExit && it.toolUseId == toolUseId }
+                        if (idx >= 0) {
+                            messages[idx] = (messages[idx] as ChatMessage.PlanModeExit).copy(resolved = true)
+                        }
+                    }
+                    // Attach tool result to the matching ToolUse block in the last AssistantMessage
                     val toolResult = ContentBlock.ToolResult(
                         toolUseId = toolUseId,
                         content = event.content,
@@ -179,6 +207,22 @@ class ChatViewModel(
             is SseEvent.Error -> {
                 messages.add(ChatMessage.ErrorMessage(content = event.message))
             }
+            is SseEvent.AskUserQuestion -> {
+                messages.add(
+                    ChatMessage.AskUserQuestion(
+                        toolUseId = event.toolUseId,
+                        questions = event.questions
+                    )
+                )
+            }
+            is SseEvent.PlanModeExit -> {
+                messages.add(
+                    ChatMessage.PlanModeExit(
+                        toolUseId = event.toolUseId,
+                        input = event.input
+                    )
+                )
+            }
             else -> { /* Connected, Disconnected, Ping */ }
         }
     }
@@ -217,6 +261,7 @@ class ChatViewModel(
                             is SseEvent.Exit -> event.eventId?.let { lastEventId = it }
                             is SseEvent.Error -> event.eventId?.let { lastEventId = it }
                             is SseEvent.ControlResponse -> event.eventId?.let { lastEventId = it }
+                            is SseEvent.AskUserQuestion -> event.eventId?.let { lastEventId = it }
                             else -> {}
                         }
                         val newMessages = _messages.value.toMutableList()
@@ -273,6 +318,45 @@ class ChatViewModel(
         }
     }
 
+    fun answerQuestion(toolUseId: String, answers: Map<String, String>) {
+        _answeredQuestions.value = _answeredQuestions.value + toolUseId
+        // Mark the AskUserQuestion message as answered
+        val newMessages = _messages.value.toMutableList()
+        val idx = newMessages.indexOfFirst { it is ChatMessage.AskUserQuestion && it.toolUseId == toolUseId }
+        if (idx >= 0) {
+            newMessages[idx] = (newMessages[idx] as ChatMessage.AskUserQuestion).copy(answered = true)
+            _messages.value = newMessages
+        }
+        viewModelScope.launch {
+            apiClient.sendToolResult(sessionId, toolUseId, Gson().toJson(mapOf("answers" to answers))).fold(
+                onSuccess = { /* sent */ },
+                onFailure = { e ->
+                    _answeredQuestions.value = _answeredQuestions.value - toolUseId
+                    addMessage(ChatMessage.ErrorMessage(content = "Failed to send answer: ${e.message}"))
+                }
+            )
+        }
+    }
+
+    fun approvePlanExit(toolUseId: String) {
+        _resolvedPlanExits.value = _resolvedPlanExits.value + toolUseId
+        val newMessages = _messages.value.toMutableList()
+        val idx = newMessages.indexOfFirst { it is ChatMessage.PlanModeExit && it.toolUseId == toolUseId }
+        if (idx >= 0) {
+            newMessages[idx] = (newMessages[idx] as ChatMessage.PlanModeExit).copy(resolved = true)
+            _messages.value = newMessages
+        }
+        viewModelScope.launch {
+            apiClient.sendToolResult(sessionId, toolUseId, Gson().toJson(emptyMap<String, Any>())).fold(
+                onSuccess = { /* sent */ },
+                onFailure = { e ->
+                    _resolvedPlanExits.value = _resolvedPlanExits.value - toolUseId
+                    addMessage(ChatMessage.ErrorMessage(content = "Failed to approve plan exit: ${e.message}"))
+                }
+            )
+        }
+    }
+
     fun sendToolResult(response: String) {
         viewModelScope.launch {
             apiClient.sendInput(sessionId, "tool_result", response)
@@ -294,6 +378,8 @@ class ChatViewModel(
         _messages.value = emptyList()
         localUserMessages.clear()
         _pendingControlResponses.value = emptySet()
+        _answeredQuestions.value = emptySet()
+        _resolvedPlanExits.value = emptySet()
         loadHistoryAndConnect()
     }
 

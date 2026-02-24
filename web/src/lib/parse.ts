@@ -1,66 +1,107 @@
-import type { ChatMessage, BufferedEvent, ContentBlock } from './types';
+import type { ChatMessage, BufferedEvent, ContentBlock, AskUserQuestionItem } from './types';
 
 /**
- * Parse a buffered SSE event into a ChatMessage (or null to skip).
+ * Parse a buffered SSE event into one or more ChatMessages (or empty to skip).
+ * Returns an array because a single assistant message may contain both regular
+ * content blocks and AskUserQuestion tool_use blocks that need separate messages.
  */
-export function parseEvent(evt: BufferedEvent): ChatMessage | null {
+export function parseEvents(evt: BufferedEvent): ChatMessage[] {
   const { event, data } = evt;
   const d = data as Record<string, unknown>;
 
   if (event === 'status') {
-    return { kind: 'status', status: d.status as ChatMessage['kind'] extends 'status' ? ChatMessage : never } as never;
+    return [{ kind: 'status', status: d.status as ChatMessage['kind'] extends 'status' ? ChatMessage : never } as never];
   }
 
   if (event === 'exit') {
-    return { kind: 'exit', code: d.code as number | undefined, signal: d.signal as string | undefined };
+    return [{ kind: 'exit', code: d.code as number | undefined, signal: d.signal as string | undefined }];
   }
 
   if (event === 'error') {
-    return { kind: 'error', message: (d.message as string) || 'Unknown error' };
+    return [{ kind: 'error', message: (d.message as string) || 'Unknown error' }];
   }
 
   if (event === 'message') {
-    return parseMessageEvent(d);
+    return parseMessageEvents(d);
   }
 
-  return null;
+  return [];
 }
 
-function parseMessageEvent(d: Record<string, unknown>): ChatMessage | null {
+/**
+ * Legacy single-message parse for backward compatibility.
+ */
+export function parseEvent(evt: BufferedEvent): ChatMessage | null {
+  const msgs = parseEvents(evt);
+  return msgs.length > 0 ? msgs[0] : null;
+}
+
+function parseMessageEvents(d: Record<string, unknown>): ChatMessage[] {
   const type = d.type as string;
 
   if (type === 'system') {
-    return { kind: 'system', data: d };
+    return [{ kind: 'system', data: d }];
   }
 
   if (type === 'assistant') {
     const msg = d.message as Record<string, unknown> | undefined;
     const content = parseContentBlocks(msg?.content);
-    return { kind: 'assistant', content, streaming: !!d.streaming };
+
+    // Extract AskUserQuestion and ExitPlanMode tool_use blocks into separate messages
+    const askBlocks: ChatMessage[] = [];
+    const regularContent: ContentBlock[] = [];
+    for (const block of content) {
+      if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
+        // Keep the tool_use in the assistant message for display context
+        regularContent.push(block);
+        // Also emit a separate interactive message
+        const questions = parseAskUserQuestions(block.input);
+        if (questions.length > 0) {
+          askBlocks.push({
+            kind: 'ask_user_question',
+            tool_use_id: block.id,
+            questions,
+          });
+        }
+      } else if (block.type === 'tool_use' && block.name === 'ExitPlanMode') {
+        regularContent.push(block);
+        askBlocks.push({
+          kind: 'plan_mode_exit',
+          tool_use_id: block.id,
+          input: block.input,
+        });
+      } else {
+        regularContent.push(block);
+      }
+    }
+
+    const result: ChatMessage[] = [{ kind: 'assistant', content: regularContent, streaming: !!d.streaming }];
+    result.push(...askBlocks);
+    return result;
   }
 
   if (type === 'result') {
     const result = d.result as Record<string, unknown> | undefined;
-    return {
+    return [{
       kind: 'result',
       cost_usd: d.cost_usd as number | undefined,
       total_cost_usd: d.total_cost_usd as number | undefined,
       usage: d.usage as Record<string, number> | undefined,
       content: result ? parseContentBlocks(result.content) : undefined,
-    };
+    }];
   }
 
   if (type === 'control_request') {
     const req = d.request as Record<string, unknown> | undefined;
     const reqSubtype = req?.subtype as string | undefined;
     if (reqSubtype === 'can_use_tool') {
-      return {
+      return [{
         kind: 'control_request',
         request_id: (d.request_id as string) || '',
         tool_name: (req?.tool_name as string) || '',
         input: (req?.input as Record<string, unknown>) || {},
         blocked_path: req?.blocked_path as string | undefined,
-      };
+      }];
     }
   }
 
@@ -70,25 +111,40 @@ function parseMessageEvent(d: Record<string, unknown>): ChatMessage | null {
     const innerResponse = response?.response as Record<string, unknown> | undefined;
     const behavior = innerResponse?.behavior as string | undefined;
     if (requestId) {
-      return {
+      return [{
         kind: 'control_response',
         request_id: requestId,
         approved: behavior === 'allow',
-      };
+      }];
     }
   }
 
   // raw / stderr / other message types — show as system
   if (type === 'raw' || type === 'stderr') {
     const text = typeof d.data === 'string' ? d.data : JSON.stringify(d.data);
-    return { kind: 'system', data: { type, text } };
+    return [{ kind: 'system', data: { type, text } }];
   }
 
   if (type === 'user') {
-    return parseUserMessage(d);
+    const msg = parseUserMessage(d);
+    return msg ? [msg] : [];
   }
 
-  return null;
+  return [];
+}
+
+function parseAskUserQuestions(input: Record<string, unknown>): AskUserQuestionItem[] {
+  const rawQuestions = input.questions;
+  if (!Array.isArray(rawQuestions)) return [];
+  return rawQuestions.map((q: Record<string, unknown>) => ({
+    question: (q.question as string) || '',
+    header: (q.header as string) || '',
+    options: Array.isArray(q.options) ? q.options.map((o: Record<string, unknown>) => ({
+      label: (o.label as string) || '',
+      description: (o.description as string) || '',
+    })) : [],
+    multiSelect: !!q.multiSelect,
+  }));
 }
 
 function parseUserMessage(d: Record<string, unknown>): ChatMessage | null {

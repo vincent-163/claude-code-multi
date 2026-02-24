@@ -27,13 +27,13 @@ android/app/src/main/java/com/claudecode/app/
     SettingsRepository.kt    # DataStore preferences persistence
     model/
       Session.kt             # Session data class + SessionStatus enum
-      ChatMessage.kt         # Sealed class: User/Assistant/Result/System/Status/Error/Exit/ControlRequest messages + ContentBlock
+      ChatMessage.kt         # Sealed class: User/Assistant/Result/System/Status/Error/Exit/ControlRequest/AskUserQuestion/PlanModeExit messages + ContentBlock + AskUserQuestionItem
       ConnectionState.kt     # SSH connection state sealed class
       SshConfig.kt           # SSH + direct API connection config
 
   network/
-    ApiClient.kt             # OkHttp REST client: createSession, listSessions, getSession, sendInput, sendControlResponse, deleteSession, healthCheck
-    SseClient.kt             # SSE stream parser -> Flow<SseEvent>; parses system/assistant/result/status/exit/error/control_request events
+    ApiClient.kt             # OkHttp REST client: createSession, listSessions, getSession, sendInput, sendControlResponse, sendToolResult, deleteSession, healthCheck
+    SseClient.kt             # SSE stream parser -> Flow<SseEvent>; parses system/assistant/result/status/exit/error/control_request/AskUserQuestion/PlanModeExit events
 
   ssh/
     SshManager.kt            # JSch SSH tunnel + remote server management
@@ -48,8 +48,8 @@ android/app/src/main/java/com/claudecode/app/
       SessionsScreen.kt      # Session list + NewSessionDialog (currently only working_directory field)
       SessionsViewModel.kt   # List/create/delete sessions via ApiClient
     chat/
-      ChatScreen.kt          # Chat UI: message list, input bar, renders text/tool_use/results/permission approvals
-      ChatViewModel.kt       # SSE subscription, message accumulation, sendMessage/approveControlRequest/denyControlRequest/sendInterrupt
+      ChatScreen.kt          # Chat UI: message list, input bar, renders text/tool_use/results/permission approvals/AskUserQuestion interactive options/PlanModeExit approval
+      ChatViewModel.kt       # SSE subscription, message accumulation, sendMessage/approveControlRequest/denyControlRequest/answerQuestion/approvePlanExit/sendInterrupt
     settings/
       SettingsScreen.kt      # Auth token, default model, working dir, server command fields
       SettingsViewModel.kt   # Read/write settings via SettingsRepository
@@ -59,6 +59,20 @@ android/app/src/main/java/com/claudecode/app/
       AnsiParser.kt          # ANSI escape code -> AnnotatedString
 
 sess.json                    # Example session JSON dump for reference
+
+web/src/                     # React/TypeScript web SPA
+  lib/
+    types.ts               # TypeScript interfaces: Session, ChatMessage (union), ContentBlock, AskUserQuestionMessage, PlanModeExitMessage
+    api.ts                 # REST client: healthCheck, listSessions, createSession, getSession, sendInput, deleteSession
+    sse.ts                 # SSE stream connection with reconnection via last_event_id
+    parse.ts               # SSE event -> ChatMessage parser (parseEvents returns array; extracts AskUserQuestion and ExitPlanMode from assistant tool_use)
+    ansi.ts                # ANSI escape code parser
+    settings.ts            # Settings persistence to localStorage
+  components/
+    ChatPage.tsx           # Chat UI: message list, input bar, control_request approval, AskUserQuestion interactive UI, ExitPlanMode approval
+    SessionsPage.tsx       # Session list + create dialog
+    SettingsPage.tsx       # API URL, auth token, default model settings
+    AnsiText.tsx           # ANSI-aware text renderer
 ```
 
 ## Key flows
@@ -66,6 +80,8 @@ sess.json                    # Example session JSON dump for reference
 - **Session creation**: SessionsScreen -> SessionsViewModel.createSession() -> ApiClient.createSession() -> POST /sessions -> SessionManager.createSession() spawns `claude --print --output-format stream-json --input-format stream-json --verbose --replay-user-messages --permission-prompt-tool stdio [flags]`
 - **Chat**: ChatScreen subscribes via SSE (GET /sessions/:id/stream). Server relays CLI stdout lines as SSE events with no content transformation. User input sent via POST /sessions/:id/input with type=user_message; server writes it to CLI stdin. Tool results sent with type=tool_result.
 - **Permission approval**: Server launches CLI with `--permission-prompt-tool stdio` and sends an initialize control_request at session start. When CLI needs permission, it emits a `control_request` event (type=message, subtype=can_use_tool) with request_id, tool_name, input, blocked_path. Client renders approve/deny UI. Responses sent via POST /sessions/:id/input with type=control_response. Server forwards control messages as-is without parsing.
+- **AskUserQuestion**: When Claude calls the `AskUserQuestion` tool, it appears as a `tool_use` block (name=AskUserQuestion) in an assistant message. The parser extracts these into separate `ask_user_question` (web) / `ChatMessage.AskUserQuestion` (Android) messages rendered as interactive option-selection UI. User answers are sent back as `type=tool_result` with the matching `tool_use_id` and content `{"answers":{"0":"selected_label",...}}`. Both web and Android support single-select, multi-select, and "Other" free-text options.
+- **ExitPlanMode**: When Claude calls `ExitPlanMode`, it appears as a `tool_use` block (name=ExitPlanMode) in an assistant message. The parser extracts these into separate `plan_mode_exit` (web) / `ChatMessage.PlanModeExit` (Android) messages rendered with an "Approve" button. Approval sends back a `type=tool_result` with the matching `tool_use_id` and empty JSON content `{}`.
 
 ## Workflow
 

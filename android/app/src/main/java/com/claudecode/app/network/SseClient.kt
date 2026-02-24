@@ -1,5 +1,7 @@
 package com.claudecode.app.network
 
+import com.claudecode.app.data.model.AskUserQuestionItem
+import com.claudecode.app.data.model.AskUserQuestionOption
 import com.claudecode.app.data.model.ContentBlock
 import com.google.gson.Gson
 import com.google.gson.JsonArray
@@ -80,9 +82,25 @@ class SseClient(
                                 dataBuffer.clear()
                                 val id = eventId.toLongOrNull()
 
-                                val event = parseEvent(eventType, data, id)
-                                if (event != null) {
-                                    trySend(event)
+                                if (eventType == "message") {
+                                    // May produce multiple events (e.g. assistant + AskUserQuestion)
+                                    try {
+                                        val json = JsonParser.parseString(data).asJsonObject
+                                        val type = json.get("type")?.asString
+                                        if (type != null) {
+                                            val events = parseMessageEvents(type, json, id)
+                                            for (evt in events) {
+                                                trySend(evt)
+                                            }
+                                        }
+                                    } catch (e: Exception) {
+                                        trySend(SseEvent.Error("Failed to parse event: ${e.message}"))
+                                    }
+                                } else {
+                                    val event = parseEvent(eventType, data, id)
+                                    if (event != null) {
+                                        trySend(event)
+                                    }
                                 }
 
                                 eventType = ""
@@ -267,6 +285,73 @@ class SseClient(
             }
         }
 
+        /**
+         * Parse a message event into potentially multiple SseEvents.
+         * An assistant message with AskUserQuestion tool_use blocks will produce
+         * both an AssistantMessage and one or more AskUserQuestion events.
+         */
+        fun parseMessageEvents(type: String, json: JsonObject, eventId: Long?): List<SseEvent> {
+            val primary = parseMessageEvent(type, json, eventId) ?: return emptyList()
+            if (type != "assistant") return listOf(primary)
+
+            // Check for AskUserQuestion tool_use blocks in assistant message
+            val message = json.getAsJsonObject("message") ?: return listOf(primary)
+            val contentArray = message.getAsJsonArray("content") ?: return listOf(primary)
+
+            val results = mutableListOf<SseEvent>(primary)
+            for (element in contentArray) {
+                val block = element.asJsonObject
+                val blockType = block.get("type")?.asString
+                val blockName = block.get("name")?.asString
+                if (blockType == "tool_use" && blockName == "AskUserQuestion") {
+                    val toolUseId = block.get("id")?.asString ?: continue
+                    val input = block.getAsJsonObject("input") ?: continue
+                    val questions = parseAskUserQuestions(input)
+                    if (questions.isNotEmpty()) {
+                        results.add(SseEvent.AskUserQuestion(
+                            toolUseId = toolUseId,
+                            questions = questions,
+                            eventId = eventId
+                        ))
+                    }
+                } else if (blockType == "tool_use" && blockName == "ExitPlanMode") {
+                    val toolUseId = block.get("id")?.asString ?: continue
+                    val input = block.getAsJsonObject("input")?.let {
+                        gson.fromJson(it.toString(), Map::class.java) as? Map<String, Any>
+                    } ?: emptyMap()
+                    results.add(SseEvent.PlanModeExit(
+                        toolUseId = toolUseId,
+                        input = input,
+                        eventId = eventId
+                    ))
+                }
+            }
+            return results
+        }
+
+        private fun parseAskUserQuestions(input: JsonObject): List<AskUserQuestionItem> {
+            val questionsArray = input.getAsJsonArray("questions") ?: return emptyList()
+            return questionsArray.mapNotNull { element ->
+                val q = element.asJsonObject
+                val question = q.get("question")?.asString ?: return@mapNotNull null
+                val header = q.get("header")?.asString ?: ""
+                val multiSelect = q.get("multiSelect")?.asBoolean ?: false
+                val options = q.getAsJsonArray("options")?.map { optEl ->
+                    val opt = optEl.asJsonObject
+                    AskUserQuestionOption(
+                        label = opt.get("label")?.asString ?: "",
+                        description = opt.get("description")?.asString ?: ""
+                    )
+                } ?: emptyList()
+                AskUserQuestionItem(
+                    question = question,
+                    header = header,
+                    options = options,
+                    multiSelect = multiSelect
+                )
+            }
+        }
+
         fun parseContentBlocks(message: JsonObject?): List<ContentBlock> {
             if (message == null) return emptyList()
 
@@ -347,6 +432,16 @@ sealed class SseEvent {
     data class ControlResponse(
         val requestId: String,
         val approved: Boolean,
+        val eventId: Long? = null
+    ) : SseEvent()
+    data class AskUserQuestion(
+        val toolUseId: String,
+        val questions: List<AskUserQuestionItem>,
+        val eventId: Long? = null
+    ) : SseEvent()
+    data class PlanModeExit(
+        val toolUseId: String,
+        val input: Map<String, Any> = emptyMap(),
         val eventId: Long? = null
     ) : SseEvent()
     data object Ping : SseEvent()

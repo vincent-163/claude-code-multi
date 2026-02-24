@@ -245,6 +245,35 @@ class ApiClient {
         }
     }
 
+    suspend fun sendToolResult(
+        sessionId: String,
+        toolUseId: String,
+        content: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val payload = JsonObject().apply {
+                addProperty("type", "tool_result")
+                addProperty("tool_use_id", toolUseId)
+                addProperty("content", content)
+            }
+            val request = authHeader(
+                Request.Builder()
+                    .url("$baseUrl/sessions/$sessionId/input")
+                    .post(gson.toJson(payload).toRequestBody(jsonMediaType))
+            ).build()
+
+            val response = shortClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                return@withContext Result.failure(
+                    RuntimeException("HTTP ${response.code}: ${response.message}")
+                )
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun deleteSession(sessionId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val request = authHeader(

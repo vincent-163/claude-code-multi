@@ -11,6 +11,7 @@ export interface Session {
   pid?: number;
   cli_session_id?: string;
   total_cost_usd?: number;
+  title?: string;
 }
 
 // --- Chat Messages ---
@@ -97,6 +98,30 @@ export interface ToolResultEvent {
   is_error: boolean;
 }
 
+export interface AskUserQuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface AskUserQuestionItem {
+  question: string;
+  header: string;
+  options: AskUserQuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface AskUserQuestionMessage {
+  kind: 'ask_user_question';
+  tool_use_id: string;
+  questions: AskUserQuestionItem[];
+}
+
+export interface PlanModeExitMessage {
+  kind: 'plan_mode_exit';
+  tool_use_id: string;
+  input: Record<string, unknown>;
+}
+
 export type ChatMessage =
   | SystemMessage
   | AssistantMessage
@@ -107,7 +132,9 @@ export type ChatMessage =
   | ControlRequestMessage
   | ControlResponseMessage
   | UserMessage
-  | ToolResultEvent;
+  | ToolResultEvent
+  | AskUserQuestionMessage
+  | PlanModeExitMessage;
 
 // --- SSE ---
 

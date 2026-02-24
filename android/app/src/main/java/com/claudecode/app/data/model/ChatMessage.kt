@@ -64,7 +64,35 @@ sealed class ChatMessage {
         val blockedPath: String? = null,
         val approved: Boolean? = null
     ) : ChatMessage()
+
+    data class AskUserQuestion(
+        override val id: String = UUID.randomUUID().toString(),
+        override val timestamp: Long = System.currentTimeMillis(),
+        val toolUseId: String,
+        val questions: List<AskUserQuestionItem>,
+        val answered: Boolean = false
+    ) : ChatMessage()
+
+    data class PlanModeExit(
+        override val id: String = UUID.randomUUID().toString(),
+        override val timestamp: Long = System.currentTimeMillis(),
+        val toolUseId: String,
+        val input: Map<String, Any> = emptyMap(),
+        val resolved: Boolean = false
+    ) : ChatMessage()
 }
+
+data class AskUserQuestionOption(
+    val label: String,
+    val description: String
+)
+
+data class AskUserQuestionItem(
+    val question: String,
+    val header: String,
+    val options: List<AskUserQuestionOption>,
+    val multiSelect: Boolean
+)
 
 sealed class ContentBlock {
     data class Text(val text: String) : ContentBlock()

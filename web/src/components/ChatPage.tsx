@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import type { Settings, ChatMessage, SessionStatus, ContentBlock } from '../lib/types'
 import * as api from '../lib/api'
 import { connectSse } from '../lib/sse'
-import { parseEvent } from '../lib/parse'
+import { parseEvents } from '../lib/parse'
 import AnsiText from './AnsiText'
 
 /** Append a tool_result content block to the assistant message that contains the matching tool_use. */
@@ -38,6 +38,8 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [sseError, setSseError] = useState('')
   const [pendingResponses, setPendingResponses] = useState<Set<string>>(new Set())
   const [resolvedRequests, setResolvedRequests] = useState<Map<string, boolean>>(new Map())
+  const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(new Set())
+  const [resolvedPlanExits, setResolvedPlanExits] = useState<Set<string>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const lastEventIdRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -61,10 +63,12 @@ export default function ChatPage({ settings, onBack }: Props) {
           // Parse history
           const historyMsgs: ChatMessage[] = []
           const historyResolved = new Map<string, boolean>()
+          const historyAnswered = new Set<string>()
+          const historyPlanExits = new Set<string>()
           for (const evt of data.history) {
             if (evt.id > lastEventIdRef.current) lastEventIdRef.current = evt.id
-            const msg = parseEvent(evt)
-            if (msg) {
+            const msgs = parseEvents(evt)
+            for (const msg of msgs) {
               if (msg.kind === 'status') {
                 setStatus(msg.status as SessionStatus)
               } else if (msg.kind === 'result' && msg.total_cost_usd) {
@@ -72,6 +76,20 @@ export default function ChatPage({ settings, onBack }: Props) {
               } else if (msg.kind === 'control_response') {
                 historyResolved.set(msg.request_id, msg.approved)
               } else if (msg.kind === 'tool_result_event') {
+                // Check if this is an AskUserQuestion response
+                const matchingAuq = historyMsgs.find(
+                  (m) => m.kind === 'ask_user_question' && m.tool_use_id === msg.tool_use_id
+                )
+                if (matchingAuq) {
+                  historyAnswered.add(msg.tool_use_id)
+                }
+                // Check if this is a plan_mode_exit response
+                const matchingPlanExit = historyMsgs.find(
+                  (m) => m.kind === 'plan_mode_exit' && m.tool_use_id === msg.tool_use_id
+                )
+                if (matchingPlanExit) {
+                  historyPlanExits.add(msg.tool_use_id)
+                }
                 historyMsgs.splice(0, historyMsgs.length, ...pairToolResult(historyMsgs, msg.tool_use_id, msg.content, msg.is_error))
               } else {
                 historyMsgs.push(msg)
@@ -79,6 +97,8 @@ export default function ChatPage({ settings, onBack }: Props) {
             }
           }
           setResolvedRequests(historyResolved)
+          setAnsweredQuestions(historyAnswered)
+          setResolvedPlanExits(historyPlanExits)
           setMessages(historyMsgs)
         } catch {
           setSseError('Failed to load session')
@@ -91,35 +111,50 @@ export default function ChatPage({ settings, onBack }: Props) {
           lastEventIdRef.current,
           (evt) => {
             lastEventIdRef.current = evt.id
-            const msg = parseEvent(evt)
-            if (!msg) return
-            if (msg.kind === 'status') {
-              setStatus(msg.status as SessionStatus)
-              return
-            }
-            if (msg.kind === 'result' && msg.total_cost_usd) {
-              setCost(msg.total_cost_usd)
-            }
-            if (msg.kind === 'control_response') {
-              setResolvedRequests((prev) => new Map(prev).set(msg.request_id, msg.approved))
-              setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
-              return
-            }
-            // Skip server-echoed user text messages during live SSE (we already added them locally on send)
-            if (msg.kind === 'user') return
-            // For assistant messages: replace last if streaming, else append
-            setMessages((prev) => {
+            const msgs = parseEvents(evt)
+            for (const msg of msgs) {
+              if (!msg) continue
+              if (msg.kind === 'status') {
+                setStatus(msg.status as SessionStatus)
+                continue
+              }
+              if (msg.kind === 'result' && msg.total_cost_usd) {
+                setCost(msg.total_cost_usd)
+              }
+              if (msg.kind === 'control_response') {
+                setResolvedRequests((prev) => new Map(prev).set(msg.request_id, msg.approved))
+                setPendingResponses((prev) => { const next = new Set(prev); next.delete(msg.request_id); return next })
+                continue
+              }
+              // Skip server-echoed user text messages during live SSE (we already added them locally on send)
+              if (msg.kind === 'user') continue
+              // For tool_result_event, check if it's an AskUserQuestion or plan_mode_exit response
               if (msg.kind === 'tool_result_event') {
-                return pairToolResult(prev, msg.tool_use_id, msg.content, msg.is_error)
+                setAnsweredQuestions((prev) => {
+                  const next = new Set(prev)
+                  next.add(msg.tool_use_id)
+                  return next
+                })
+                setResolvedPlanExits((prev) => {
+                  const next = new Set(prev)
+                  next.add(msg.tool_use_id)
+                  return next
+                })
               }
-              if (msg.kind === 'assistant') {
-                const last = prev[prev.length - 1]
-                if (last?.kind === 'assistant' && last.streaming) {
-                  return [...prev.slice(0, -1), msg]
+              // For assistant messages: replace last if streaming, else append
+              setMessages((prev) => {
+                if (msg.kind === 'tool_result_event') {
+                  return pairToolResult(prev, msg.tool_use_id, msg.content, msg.is_error)
                 }
-              }
-              return [...prev, msg]
-            })
+                if (msg.kind === 'assistant') {
+                  const last = prev[prev.length - 1]
+                  if (last?.kind === 'assistant' && last.streaming) {
+                    return [...prev.slice(0, -1), msg]
+                  }
+                }
+                return [...prev, msg]
+              })
+            }
           },
           (err) => {
             setSseError(err instanceof Error ? err.message : 'SSE connection lost')
@@ -202,6 +237,36 @@ export default function ChatPage({ settings, onBack }: Props) {
     }
   }
 
+  const answerQuestion = async (toolUseId: string, answers: Record<string, string>) => {
+    if (!sessionId) return
+    setAnsweredQuestions((prev) => new Set(prev).add(toolUseId))
+    try {
+      await api.sendInput(settings, sessionId, {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: JSON.stringify({ answers }),
+      })
+    } catch (err) {
+      setAnsweredQuestions((prev) => { const next = new Set(prev); next.delete(toolUseId); return next })
+      setMessages((prev) => [...prev, { kind: 'error', message: err instanceof Error ? err.message : 'Failed to send answer' }])
+    }
+  }
+
+  const approvePlanExit = async (toolUseId: string) => {
+    if (!sessionId) return
+    setResolvedPlanExits((prev) => new Set(prev).add(toolUseId))
+    try {
+      await api.sendInput(settings, sessionId, {
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: JSON.stringify({}),
+      })
+    } catch (err) {
+      setResolvedPlanExits((prev) => { const next = new Set(prev); next.delete(toolUseId); return next })
+      setMessages((prev) => [...prev, { kind: 'error', message: err instanceof Error ? err.message : 'Failed to approve plan exit' }])
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -231,7 +296,7 @@ export default function ChatPage({ settings, onBack }: Props) {
 
       <div className="messages">
         {messages.map((msg, i) => (
-          <MessageView key={i} msg={msg} onApprove={approveRequest} onDeny={denyRequest} pendingResponses={pendingResponses} resolvedRequests={resolvedRequests} />
+          <MessageView key={i} msg={msg} onApprove={approveRequest} onDeny={denyRequest} onAnswer={answerQuestion} onApprovePlanExit={approvePlanExit} pendingResponses={pendingResponses} resolvedRequests={resolvedRequests} answeredQuestions={answeredQuestions} resolvedPlanExits={resolvedPlanExits} />
         ))}
         <div ref={messagesEndRef} />
       </div>
@@ -256,12 +321,16 @@ export default function ChatPage({ settings, onBack }: Props) {
   )
 }
 
-function MessageView({ msg, onApprove, onDeny, pendingResponses, resolvedRequests }: {
+function MessageView({ msg, onApprove, onDeny, onAnswer, onApprovePlanExit, pendingResponses, resolvedRequests, answeredQuestions, resolvedPlanExits }: {
   msg: ChatMessage
   onApprove: (id: string) => void
   onDeny: (id: string) => void
+  onAnswer: (toolUseId: string, answers: Record<string, string>) => void
+  onApprovePlanExit: (toolUseId: string) => void
   pendingResponses: Set<string>
   resolvedRequests: Map<string, boolean>
+  answeredQuestions: Set<string>
+  resolvedPlanExits: Set<string>
 }) {
   switch (msg.kind) {
     case 'user':
@@ -281,6 +350,28 @@ function MessageView({ msg, onApprove, onDeny, pendingResponses, resolvedRequest
           </div>
         </div>
       )
+
+    case 'ask_user_question':
+      return <AskUserQuestionView msg={msg} onAnswer={onAnswer} isAnswered={answeredQuestions.has(msg.tool_use_id)} />
+
+    case 'plan_mode_exit': {
+      const resolved = resolvedPlanExits.has(msg.tool_use_id)
+      return (
+        <div className="message">
+          <div className={`control-request${resolved ? ' resolved' : ''}`}>
+            <div className="cr-header">Exit Plan Mode</div>
+            <div style={{ fontSize: 13, margin: '6px 0' }}>Claude wants to exit plan mode and begin implementation.</div>
+            <div className="cr-actions">
+              {resolved ? (
+                <span className="cr-status allowed">Approved</span>
+              ) : (
+                <button className="approve" onClick={() => onApprovePlanExit(msg.tool_use_id)}>Approve</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    }
 
     case 'result':
       return msg.content && msg.content.length > 0 ? (
@@ -413,6 +504,114 @@ function ToolResultBlock({ block }: { block: import('../lib/types').ContentBlock
       {!expanded && isLong && (
         <div className="expand-hint">Click to show more...</div>
       )}
+    </div>
+  )
+}
+
+function AskUserQuestionView({ msg, onAnswer, isAnswered }: {
+  msg: ChatMessage & { kind: 'ask_user_question' }
+  onAnswer: (toolUseId: string, answers: Record<string, string>) => void
+  isAnswered: boolean
+}) {
+  const [selections, setSelections] = useState<Record<string, string | string[]>>({})
+  const [customInputs, setCustomInputs] = useState<Record<string, string>>({})
+  const [submitted, setSubmitted] = useState(isAnswered)
+
+  const handleSelect = (qIdx: number, label: string, multiSelect: boolean) => {
+    setSelections((prev) => {
+      const key = String(qIdx)
+      if (multiSelect) {
+        const current = (prev[key] as string[]) || []
+        if (current.includes(label)) {
+          return { ...prev, [key]: current.filter((l) => l !== label) }
+        }
+        return { ...prev, [key]: [...current, label] }
+      }
+      // For single-select, if selecting "Other", keep the value as-is (will use custom input)
+      return { ...prev, [key]: label }
+    })
+  }
+
+  const handleSubmit = () => {
+    const answers: Record<string, string> = {}
+    for (let i = 0; i < msg.questions.length; i++) {
+      const key = String(i)
+      const sel = selections[key]
+      if (sel === '__other__') {
+        answers[key] = customInputs[key] || ''
+      } else if (Array.isArray(sel)) {
+        const resolved = sel.map((s) => s === '__other__' ? (customInputs[key] || '') : s)
+        answers[key] = resolved.join(', ')
+      } else {
+        answers[key] = (sel as string) || ''
+      }
+    }
+    setSubmitted(true)
+    onAnswer(msg.tool_use_id, answers)
+  }
+
+  const allAnswered = msg.questions.every((_, i) => {
+    const sel = selections[String(i)]
+    if (!sel) return false
+    if (Array.isArray(sel)) return sel.length > 0
+    return true
+  })
+
+  return (
+    <div className="message">
+      <div className={`ask-user-question${submitted ? ' resolved' : ''}`}>
+        <div className="auq-header">Question</div>
+        {msg.questions.map((q, qi) => (
+          <div key={qi} className="auq-question">
+            <div className="auq-question-text">
+              {q.header && <span className="auq-tag">{q.header}</span>}
+              {q.question}
+            </div>
+            <div className="auq-options">
+              {q.options.map((opt, oi) => {
+                const key = String(qi)
+                const sel = selections[key]
+                const isSelected = Array.isArray(sel) ? sel.includes(opt.label) : sel === opt.label
+                return (
+                  <button
+                    key={oi}
+                    className={`auq-option${isSelected ? ' selected' : ''}`}
+                    onClick={() => !submitted && handleSelect(qi, opt.label, q.multiSelect)}
+                    disabled={submitted}
+                  >
+                    <div className="auq-option-label">{opt.label}</div>
+                    {opt.description && <div className="auq-option-desc">{opt.description}</div>}
+                  </button>
+                )
+              })}
+              <button
+                className={`auq-option${(Array.isArray(selections[String(qi)]) ? (selections[String(qi)] as string[]).includes('__other__') : selections[String(qi)] === '__other__') ? ' selected' : ''}`}
+                onClick={() => !submitted && handleSelect(qi, '__other__', q.multiSelect)}
+                disabled={submitted}
+              >
+                <div className="auq-option-label">Other</div>
+              </button>
+              {(Array.isArray(selections[String(qi)]) ? (selections[String(qi)] as string[]).includes('__other__') : selections[String(qi)] === '__other__') && (
+                <input
+                  type="text"
+                  className="auq-custom-input"
+                  placeholder="Type your answer..."
+                  value={customInputs[String(qi)] || ''}
+                  onChange={(e) => setCustomInputs((prev) => ({ ...prev, [String(qi)]: e.target.value }))}
+                  disabled={submitted}
+                />
+              )}
+            </div>
+          </div>
+        ))}
+        <div className="auq-actions">
+          {submitted ? (
+            <span className="auq-status answered">Answered</span>
+          ) : (
+            <button className="approve" onClick={handleSubmit} disabled={!allAnswered}>Submit</button>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

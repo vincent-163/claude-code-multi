@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.QuestionAnswer
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.claudecode.app.data.model.ChatMessage
+import com.claudecode.app.data.model.AskUserQuestionItem
 import com.claudecode.app.data.model.ContentBlock
 import com.claudecode.app.ui.theme.AccentBlue
 import com.claudecode.app.ui.theme.AccentGreen
@@ -243,6 +245,8 @@ private fun MessageItem(message: ChatMessage, viewModel: ChatViewModel) {
         is ChatMessage.ErrorMessage -> ErrorMessageBlock(message)
         is ChatMessage.ExitMessage -> ExitMessageBlock(message)
         is ChatMessage.ControlRequest -> ToolApprovalBlock(message, viewModel)
+        is ChatMessage.AskUserQuestion -> AskUserQuestionBlock(message, viewModel)
+        is ChatMessage.PlanModeExit -> PlanModeExitBlock(message, viewModel)
     }
 }
 
@@ -690,6 +694,267 @@ private fun ToolApprovalBlock(message: ChatMessage.ControlRequest, viewModel: Ch
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AskUserQuestionBlock(message: ChatMessage.AskUserQuestion, viewModel: ChatViewModel) {
+    val answeredQuestions by viewModel.answeredQuestions.collectAsState()
+    val isAnswered = message.answered || answeredQuestions.contains(message.toolUseId)
+    var selections by remember { mutableStateOf<Map<Int, Any>>(emptyMap()) }
+    var customInputs by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(AccentBlue.copy(alpha = 0.12f))
+            .animateContentSize()
+            .padding(12.dp)
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.QuestionAnswer,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = AccentBlue
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    "Question",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = AccentBlue
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            for ((qi, q) in message.questions.withIndex()) {
+                if (q.header.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(AccentBlue.copy(alpha = 0.2f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            q.header,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentBlue
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                Text(
+                    q.question,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Render options + "Other"
+                val allOptions = q.options + listOf(
+                    com.claudecode.app.data.model.AskUserQuestionOption("Other", "")
+                )
+                for ((oi, opt) in allOptions.withIndex()) {
+                    val isOther = opt.label == "Other" && oi == allOptions.lastIndex
+                    val optLabel = opt.label
+                    val sel = selections[qi]
+                    @Suppress("UNCHECKED_CAST")
+                    val isSelected = if (q.multiSelect) {
+                        val selected = (sel as? List<String>) ?: emptyList()
+                        if (isOther) selected.contains("__other__") else selected.contains(optLabel)
+                    } else {
+                        if (isOther) sel == "__other__" else sel == optLabel
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(
+                                if (isSelected) AccentBlue.copy(alpha = 0.15f)
+                                else CodeBackground
+                            )
+                            .then(
+                                if (!isAnswered) Modifier.clickable {
+                                    val clickLabel = if (isOther) "__other__" else optLabel
+                                    @Suppress("UNCHECKED_CAST")
+                                    selections = if (q.multiSelect) {
+                                        val current = (selections[qi] as? List<String>) ?: emptyList()
+                                        if (current.contains(clickLabel)) {
+                                            selections + (qi to current.filter { it != clickLabel })
+                                        } else {
+                                            selections + (qi to current + clickLabel)
+                                        }
+                                    } else {
+                                        selections + (qi to clickLabel)
+                                    }
+                                } else Modifier
+                            )
+                            .padding(10.dp)
+                    ) {
+                        Column {
+                            Text(
+                                opt.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) AccentBlue else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (opt.description.isNotBlank()) {
+                                Text(
+                                    opt.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Custom input field for "Other"
+                val selForOther = selections[qi]
+                @Suppress("UNCHECKED_CAST")
+                val hasOther = if (q.multiSelect) {
+                    (selForOther as? List<String>)?.contains("__other__") == true
+                } else {
+                    selForOther == "__other__"
+                }
+                if (hasOther) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = customInputs[qi] ?: "",
+                        onValueChange = { customInputs = customInputs + (qi to it) },
+                        placeholder = { Text("Type your answer...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isAnswered,
+                        maxLines = 2,
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            focusedBorderColor = AccentBlue,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                        )
+                    )
+                }
+
+                if (qi < message.questions.size - 1) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (isAnswered) {
+                Text(
+                    "Answered",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AccentGreen,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                val allAnswered = message.questions.indices.all { qi ->
+                    val sel = selections[qi]
+                    when {
+                        sel == null -> false
+                        sel is List<*> -> sel.isNotEmpty()
+                        else -> true
+                    }
+                }
+                Button(
+                    onClick = {
+                        val answers = mutableMapOf<String, String>()
+                        for (qi in message.questions.indices) {
+                            val sel = selections[qi]
+                            @Suppress("UNCHECKED_CAST")
+                            answers[qi.toString()] = when {
+                                sel == "__other__" -> customInputs[qi] ?: ""
+                                sel is List<*> -> {
+                                    (sel as List<String>).joinToString(", ") { s ->
+                                        if (s == "__other__") customInputs[qi] ?: "" else s
+                                    }
+                                }
+                                sel is String -> sel
+                                else -> ""
+                            }
+                        }
+                        viewModel.answerQuestion(message.toolUseId, answers)
+                    },
+                    enabled = allAnswered,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AccentBlue
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.Send,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Submit")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PlanModeExitBlock(message: ChatMessage.PlanModeExit, viewModel: ChatViewModel) {
+    val resolvedPlanExits by viewModel.resolvedPlanExits.collectAsState()
+    val isResolved = message.resolved || resolvedPlanExits.contains(message.toolUseId)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(CodeBackground)
+            .padding(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.Build,
+                contentDescription = null,
+                tint = AccentOrange,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                "Exit Plan Mode",
+                color = AccentOrange,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            "Claude wants to exit plan mode and begin implementation.",
+            color = TextSecondary,
+            fontSize = 13.sp
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        if (isResolved) {
+            Text(
+                "Approved",
+                color = AccentGreen,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp
+            )
+        } else {
+            Button(
+                onClick = { viewModel.approvePlanExit(message.toolUseId) },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentGreen)
+            ) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Approve")
             }
         }
     }

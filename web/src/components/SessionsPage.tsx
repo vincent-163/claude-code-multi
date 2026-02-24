@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Settings, Session } from '../lib/types'
 import * as api from '../lib/api'
 
@@ -13,6 +13,9 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showCreate, setShowCreate] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const editRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -29,6 +32,13 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
 
   useEffect(() => { refresh() }, [refresh])
 
+  useEffect(() => {
+    if (editingId && editRef.current) {
+      editRef.current.focus()
+      editRef.current.select()
+    }
+  }, [editingId])
+
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
     if (!confirm('Delete this session?')) return
@@ -37,6 +47,31 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
       setSessions((s) => s.filter((x) => x.id !== id))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Delete failed')
+    }
+  }
+
+  const startEditing = (e: React.MouseEvent, s: Session) => {
+    e.stopPropagation()
+    setEditingId(s.id)
+    setEditValue(s.title || '')
+  }
+
+  const commitTitle = async (id: string) => {
+    const trimmed = editValue.trim()
+    setEditingId(null)
+    try {
+      await api.updateSessionTitle(settings, id, trimmed)
+      setSessions((prev) => prev.map((s) => s.id === id ? { ...s, title: trimmed || undefined } : s))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Rename failed')
+    }
+  }
+
+  const handleEditKeyDown = (e: React.KeyboardEvent, id: string) => {
+    if (e.key === 'Enter') {
+      commitTitle(id)
+    } else if (e.key === 'Escape') {
+      setEditingId(null)
     }
   }
 
@@ -66,6 +101,22 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
           <div key={s.id} className="session-card" onClick={() => onOpenChat(s.id)}>
             <div className={`status-dot ${statusColor(s.status)}`} />
             <div className="info">
+              {editingId === s.id ? (
+                <input
+                  ref={editRef}
+                  className="title-edit"
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  onBlur={() => commitTitle(s.id)}
+                  onKeyDown={(e) => handleEditKeyDown(e, s.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="Untitled"
+                />
+              ) : (
+                <div className="title" onClick={(e) => startEditing(e, s)}>
+                  {s.title || <span className="title-placeholder">Untitled</span>}
+                </div>
+              )}
               <div className="dir">{s.working_directory || '~'}</div>
               <div className="id">{s.id}</div>
             </div>

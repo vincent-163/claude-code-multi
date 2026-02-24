@@ -25,6 +25,7 @@ export class Session {
   lastActiveAt: number;
   pid: number | undefined;
   cliSessionId: string | undefined;
+  title: string | undefined;
 
   totalCostUsd: number = 0;
 
@@ -219,6 +220,7 @@ export class Session {
       pid: this.pid,
       cli_session_id: this.cliSessionId,
       total_cost_usd: this.totalCostUsd,
+      title: this.title,
     };
   }
 
@@ -231,6 +233,7 @@ export class Session {
       working_directory: this.workingDirectory,
       cli_session_id: this.cliSessionId,
       total_cost_usd: this.totalCostUsd,
+      title: this.title,
     };
   }
 
@@ -419,6 +422,7 @@ export class SessionManager {
     permissionMode?: string;
     systemPrompt?: string;
     additionalFlags?: string[];
+    title?: string;
   }): Promise<Session> {
     if (this.activeCount >= this.config.maxSessions) {
       throw new Error('Max sessions reached');
@@ -429,12 +433,13 @@ export class SessionManager {
     const sessionId = 'sess_' + randomUUID().replace(/-/g, '').slice(0, 12);
     const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
     const session = new Session(sessionId, cwd, this.config.bufferSize, jsonlPath);
+    session.title = opts.title;
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
       fs.appendFileSync(jsonlPath, JSON.stringify({
         id: 0, event: 'meta', timestamp: Date.now() / 1000,
-        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags },
+        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title },
       }) + '\n');
     } catch (err) {
       logger.warn(`Failed to write meta to ${jsonlPath}: ${err}`);
@@ -499,6 +504,36 @@ export class SessionManager {
     return this.sessions.get(id);
   }
 
+  updateSessionTitle(id: string, title: string): boolean {
+    // Update in-memory session if present
+    const session = this.sessions.get(id);
+    if (session) {
+      session.title = title;
+    }
+
+    // Update the meta line in the JSONL file
+    const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
+    if (!fs.existsSync(jsonlPath)) return false;
+
+    try {
+      const content = fs.readFileSync(jsonlPath, 'utf-8');
+      const lines = content.split('\n');
+      if (lines.length > 0 && lines[0]) {
+        const meta = JSON.parse(lines[0]);
+        if (meta.event === 'meta') {
+          meta.data = meta.data || {};
+          meta.data.title = title;
+          lines[0] = JSON.stringify(meta);
+          fs.writeFileSync(jsonlPath, lines.join('\n'));
+          return true;
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed to update title for session ${id}: ${err}`);
+    }
+    return !!session;
+  }
+
   removeSession(id: string): void {
     this.sessions.delete(id);
   }
@@ -529,9 +564,10 @@ export class SessionManager {
       throw new Error(`No CLI session_id found in history for session ${sessionId}`);
     }
 
-    // Read working_directory and additional_flags from the meta line
+    // Read working_directory, additional_flags, and title from the meta line
     let workingDirectory = opts?.workingDirectory || process.cwd();
     let storedFlags: string[] | undefined;
+    let storedTitle: string | undefined;
     try {
       const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
       if (firstLine) {
@@ -542,6 +578,9 @@ export class SessionManager {
           }
           if (Array.isArray(metaEvt.data?.additional_flags)) {
             storedFlags = metaEvt.data.additional_flags;
+          }
+          if (metaEvt.data?.title) {
+            storedTitle = metaEvt.data.title;
           }
         }
       }
@@ -562,8 +601,7 @@ export class SessionManager {
     }
 
     const session = new Session(sessionId, workingDirectory, this.config.bufferSize, jsonlPath);
-
-    // Load all history from JSONL into the buffer so SSE clients get full history
+    session.title = storedTitle;
     session.loadBufferFromFile(jsonlPath);
 
     session.onCliSessionId = (_sid, cliSessionId) => {
@@ -635,14 +673,20 @@ export class SessionManager {
         const jsonlPath = path.join(this.sessionsDir, file);
         const meta = Session.readSessionMeta(jsonlPath);
 
-        // Read working_directory from meta line
+        // Read working_directory and title from meta line
         let workingDirectory = process.cwd();
+        let title: string | undefined;
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
           if (firstLine) {
             const metaEvt = JSON.parse(firstLine);
-            if (metaEvt.event === 'meta' && metaEvt.data?.working_directory) {
-              workingDirectory = metaEvt.data.working_directory;
+            if (metaEvt.event === 'meta') {
+              if (metaEvt.data?.working_directory) {
+                workingDirectory = metaEvt.data.working_directory;
+              }
+              if (metaEvt.data?.title) {
+                title = metaEvt.data.title;
+              }
             }
           }
         } catch {
@@ -656,6 +700,7 @@ export class SessionManager {
           last_active_at: meta?.lastActiveAt || 0,
           working_directory: workingDirectory,
           cli_session_id: meta?.cliSessionId,
+          title,
         });
       }
     } catch (err) {
