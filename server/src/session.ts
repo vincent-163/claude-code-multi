@@ -384,11 +384,11 @@ export class Session {
             },
           }, {
             name: MCP_TOOL_SCHEDULE_TASK,
-            description: 'Schedule a Claude Code session to run at a future time. The session will be launched with the given prompt as the first user message at the specified time.',
+            description: 'Schedule a Claude Code session to run at a future time. The session will be launched with the given prompt as the first user message at the specified time. IMPORTANT: The scheduled session has NO access to the current conversation history. The prompt MUST be entirely self-contained — include all relevant context such as file paths, project details, specific instructions, and expected outcomes so the new session can execute the task without any prior knowledge.',
             inputSchema: {
               type: 'object',
               properties: {
-                prompt: { type: 'string', description: 'The prompt/task to send as the first user message' },
+                prompt: { type: 'string', description: 'A self-contained prompt with all necessary context (file paths, project details, instructions). The scheduled session has no conversation history.' },
                 working_directory: { type: 'string', description: 'Absolute path to the working directory for the scheduled session' },
                 scheduled_at: { type: 'string', description: 'ISO 8601 datetime string for when to run (e.g. "2026-02-25T09:00:00Z")' },
               },
