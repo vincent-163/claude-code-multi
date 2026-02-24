@@ -737,6 +737,7 @@ private fun ToolApprovalBlock(message: ChatMessage.ControlRequest, viewModel: Ch
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AskUserQuestionBlock(message: ChatMessage.AskUserQuestion, viewModel: ChatViewModel) {
     val answeredQuestions by viewModel.answeredQuestions.collectAsState()
