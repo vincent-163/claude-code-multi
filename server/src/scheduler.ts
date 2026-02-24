@@ -14,6 +14,7 @@ export interface ScheduledTask {
   status: 'pending' | 'running' | 'completed' | 'failed';
   session_id: string | null;
   error: string | null;
+  session_opts: string | null;  // JSON: { model?, permissionMode?, additionalFlags? }
 }
 
 export class Scheduler {
@@ -42,27 +43,33 @@ export class Scheduler {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         status TEXT NOT NULL DEFAULT 'pending',
         session_id TEXT,
-        error TEXT
+        error TEXT,
+        session_opts TEXT
       )
     `);
+    // Migration: add session_opts column if missing (existing DBs)
+    try {
+      this.db.exec(`ALTER TABLE scheduled_tasks ADD COLUMN session_opts TEXT`);
+    } catch (_) { /* column already exists */ }
   }
 
   /** Add a new scheduled task. Returns the created task. */
-  add(prompt: string, workingDirectory: string, scheduledAt: string): ScheduledTask {
+  add(prompt: string, workingDirectory: string, scheduledAt: string, sessionOpts?: { model?: string; permissionMode?: string; additionalFlags?: string[] }): ScheduledTask {
     const id = randomUUID();
     const now = new Date().toISOString();
+    const optsJson = sessionOpts ? JSON.stringify(sessionOpts) : null;
     this.db.prepare(
-      `INSERT INTO scheduled_tasks (id, prompt, working_directory, scheduled_at, created_at, status)
-       VALUES (?, ?, ?, ?, ?, 'pending')`
-    ).run(id, prompt, workingDirectory, scheduledAt, now);
-    return { id, prompt, working_directory: workingDirectory, scheduled_at: scheduledAt, created_at: now, status: 'pending', session_id: null, error: null };
+      `INSERT INTO scheduled_tasks (id, prompt, working_directory, scheduled_at, created_at, status, session_opts)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`
+    ).run(id, prompt, workingDirectory, scheduledAt, now, optsJson);
+    return { id, prompt, working_directory: workingDirectory, scheduled_at: scheduledAt, created_at: now, status: 'pending', session_id: null, error: null, session_opts: optsJson };
   }
 
   /** List tasks whose working_directory is under the given base directory. */
   list(baseDir: string): ScheduledTask[] {
     const resolved = path.resolve(baseDir);
     const rows = this.db.prepare(
-      `SELECT id, prompt, working_directory, scheduled_at, created_at, status, session_id, error
+      `SELECT id, prompt, working_directory, scheduled_at, created_at, status, session_id, error, session_opts
        FROM scheduled_tasks ORDER BY scheduled_at ASC`
     ).all() as ScheduledTask[];
     return rows.filter(r => {
@@ -105,7 +112,7 @@ export class Scheduler {
   private pollDue(): void {
     const now = new Date().toISOString();
     const dueTasks = this.db.prepare(
-      `SELECT id, prompt, working_directory, scheduled_at, created_at, status, session_id, error
+      `SELECT id, prompt, working_directory, scheduled_at, created_at, status, session_id, error, session_opts
        FROM scheduled_tasks WHERE status = 'pending' AND scheduled_at <= ?`
     ).all(now) as ScheduledTask[];
 
@@ -120,11 +127,13 @@ export class Scheduler {
 
     try {
       const scheduledPrompt = `[Scheduled task] ${task.prompt}`;
+      // Use per-task session opts (from the scheduling session), falling back to global defaults
+      const opts = task.session_opts ? JSON.parse(task.session_opts) as { model?: string; permissionMode?: string; additionalFlags?: string[] } : {};
       const session = await this.manager.createSession({
         workingDirectory: task.working_directory,
-        model: this.sessionOpts.model,
-        permissionMode: this.sessionOpts.permissionMode,
-        additionalFlags: this.sessionOpts.additionalFlags,
+        model: opts.model || this.sessionOpts.model,
+        permissionMode: opts.permissionMode || this.sessionOpts.permissionMode,
+        additionalFlags: opts.additionalFlags || this.sessionOpts.additionalFlags,
         title: `Scheduled: ${task.prompt.slice(0, 60)}`,
       });
 

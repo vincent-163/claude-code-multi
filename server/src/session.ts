@@ -36,6 +36,9 @@ export class Session {
 
   totalCostUsd: number = 0;
 
+  /** Session creation options, used to propagate to scheduled tasks */
+  sessionOpts: { model?: string; permissionMode?: string; additionalFlags?: string[] } = {};
+
   /** Called when the title is changed via MCP tool */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
 
@@ -437,7 +440,7 @@ export class Session {
           };
         } else {
           try {
-            const task = this.scheduler.add(prompt, workDir, scheduledAt);
+            const task = this.scheduler.add(prompt, workDir, scheduledAt, this.sessionOpts);
             mcpResponse = {
               jsonrpc: '2.0', id: message.id,
               result: { content: [{ type: 'text', text: `Scheduled task ${task.id} for ${task.scheduled_at}` }] },
@@ -616,6 +619,7 @@ export class SessionManager {
     const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
     const session = new Session(sessionId, cwd, this.config.bufferSize, jsonlPath);
     session.title = opts.title;
+    session.sessionOpts = { model: opts.model, permissionMode: opts.permissionMode, additionalFlags: opts.additionalFlags };
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
