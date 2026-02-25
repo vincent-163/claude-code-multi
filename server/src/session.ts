@@ -642,12 +642,11 @@ export class Session {
       };
     }
 
-    const members: { id: string; title?: string; description?: string; status: string }[] = [];
-    for (const s of this.sessionManager.getAllSessions()) {
-      if (s.teamId === this.teamId) {
-        members.push({ id: s.id, title: s.title, description: s.description, status: s.status });
-      }
-    }
+    // Use listSessions() to include both in-memory and disk-only (dead) sessions
+    const allSessions = this.sessionManager.listSessions() as { id: string; title?: string; description?: string; status: string; team_id?: string }[];
+    const members = allSessions
+      .filter(s => s.team_id === this.teamId)
+      .map(s => ({ id: s.id, title: s.title, description: s.description, status: s.status }));
 
     return {
       jsonrpc: '2.0', id: messageId,
