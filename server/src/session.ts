@@ -725,6 +725,42 @@ export class Session {
       if (typeof totalCost === 'number') {
         this.totalCostUsd = totalCost;
       }
+
+      // Auto-forward final message to parent (team lead) if this is a team member
+      this.forwardResultToParent(parsed);
+    }
+  }
+
+  /**
+   * If this session is a team member (not the lead), forward the result text
+   * to the parent/team-lead session as a team message.
+   */
+  private forwardResultToParent(parsed: Record<string, unknown>): void {
+    // Only for team members (teamId set and not the lead itself)
+    if (!this.teamId || this.teamId === this.id || !this.sessionManager) return;
+
+    const parent = this.sessionManager.getSession(this.teamId);
+    if (!parent || parent.status === 'dead') return;
+
+    const isError = parsed.is_error === true;
+    const resultText = parsed.result as string | undefined;
+
+    if (!resultText && !isError) return;
+
+    const senderLabel = this.title || this.id;
+    const prefix = isError ? '[Error]' : '[Result]';
+    const body = resultText || 'Task ended with error (no details available)';
+    const msg = `${prefix} Team member ${senderLabel} (${this.id}) finished:\n${body}`;
+
+    const ok = parent.sendStreamJsonMessage({
+      type: 'user',
+      message: { role: 'user', content: `[Team message from ${senderLabel} (${this.id})]: ${msg}` },
+    });
+
+    if (ok) {
+      logger.info(`Session ${this.id} auto-forwarded result to parent ${this.teamId}`);
+    } else {
+      logger.warn(`Session ${this.id} failed to forward result to parent ${this.teamId}`);
     }
   }
 
