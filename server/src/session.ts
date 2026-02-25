@@ -617,10 +617,12 @@ export class Session {
 
       await waitReady();
 
-      // Send the prompt as a user message
+      // Send the prompt as a user message, prefixed with team lead identity
+      const leadLabel = this.title || this.id;
+      const prefixedPrompt = `[You were created by team lead ${leadLabel} (session ${this.id}, team ${this.teamId})]\n\n${prompt}`;
       member.sendStreamJsonMessage({
         type: 'user',
-        message: { role: 'user', content: prompt },
+        message: { role: 'user', content: prefixedPrompt },
       });
 
       logger.info(`Session ${this.id} created team member ${member.id} (team ${this.teamId})`);
