@@ -204,19 +204,25 @@ export function createRoutes(manager: SessionManager): Router {
     req.on('error', cleanup);
   });
 
-  // --- Update Session (title) ---
+  // --- Update Session (title, description) ---
   router.patch('/sessions/:id', (req: Request, res: Response) => {
-    const { title } = req.body || {};
-    if (typeof title !== 'string') {
-      res.status(400).json({ error: 'title must be a string' });
+    const { title, description } = req.body || {};
+    if (typeof title !== 'string' && typeof description !== 'string') {
+      res.status(400).json({ error: 'title or description must be a string' });
       return;
     }
-    const updated = manager.updateSessionTitle(req.params.id, title);
-    if (!updated) {
+    let found = false;
+    if (typeof title === 'string') {
+      found = manager.updateSessionTitle(req.params.id, title) || found;
+    }
+    if (typeof description === 'string') {
+      found = manager.updateSessionDescription(req.params.id, description) || found;
+    }
+    if (!found) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
-    res.json({ id: req.params.id, title });
+    res.json({ id: req.params.id, title, description });
   });
 
   // --- Resize ---

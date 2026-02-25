@@ -341,7 +341,9 @@ private data class SessionResponse(
     @SerializedName("working_directory") val workingDirectory: String?,
     val pid: Int?,
     @SerializedName("total_cost_usd") val totalCostUsd: Double?,
-    val title: String?
+    val title: String?,
+    val description: String?,
+    @SerializedName("team_id") val teamId: String?
 ) {
     fun toSession() = Session(
         id = id,
@@ -351,7 +353,9 @@ private data class SessionResponse(
         workingDirectory = workingDirectory ?: "",
         pid = pid,
         totalCostUsd = totalCostUsd,
-        title = title
+        title = title,
+        description = description,
+        teamId = teamId
     )
 }
 
@@ -364,6 +368,8 @@ data class SessionDetailResponse(
     val pid: Int?,
     @SerializedName("total_cost_usd") val totalCostUsd: Double?,
     val title: String?,
+    val description: String?,
+    @SerializedName("team_id") val teamId: String?,
     val history: List<Map<String, Any>>?,
     @Transient val rawHistory: List<JsonObject> = emptyList()
 ) {
@@ -375,6 +381,8 @@ data class SessionDetailResponse(
         workingDirectory = workingDirectory ?: "",
         pid = pid,
         totalCostUsd = totalCostUsd,
-        title = title
+        title = title,
+        description = description,
+        teamId = teamId
     )
 }

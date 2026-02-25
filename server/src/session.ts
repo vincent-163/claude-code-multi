@@ -23,6 +23,9 @@ const MCP_TOOL_SET_TITLE = 'set_session_title';
 const MCP_TOOL_SCHEDULE_TASK = 'schedule_task';
 const MCP_TOOL_LIST_SCHEDULES = 'list_schedules';
 const MCP_TOOL_DELETE_SCHEDULE = 'delete_schedule';
+const MCP_TOOL_CREATE_TEAM_MEMBER = 'create_team_member';
+const MCP_TOOL_LIST_TEAM_MEMBERS = 'list_team_members';
+const MCP_TOOL_SEND_TEAM_MESSAGE = 'send_team_message';
 
 export class Session {
   id: string;
@@ -33,6 +36,8 @@ export class Session {
   pid: number | undefined;
   cliSessionId: string | undefined;
   title: string | undefined;
+  description: string | undefined;
+  teamId: string | undefined;
 
   totalCostUsd: number = 0;
 
@@ -42,8 +47,14 @@ export class Session {
   /** Called when the title is changed via MCP tool */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
 
+  /** Called when the description is changed via MCP tool */
+  onDescriptionChanged: ((sessionId: string, description: string) => void) | null = null;
+
   /** Scheduler instance for schedule MCP tools */
   scheduler: Scheduler | null = null;
+
+  /** SessionManager reference for team MCP tools */
+  sessionManager: SessionManager | null = null;
 
   /** Resolves when the CLI emits its system init message with session_id */
   readonly cliSessionIdReady: Promise<string>;
@@ -244,6 +255,8 @@ export class Session {
       cli_session_id: this.cliSessionId,
       total_cost_usd: this.totalCostUsd,
       title: this.title,
+      description: this.description,
+      team_id: this.teamId,
     };
   }
 
@@ -257,6 +270,8 @@ export class Session {
       cli_session_id: this.cliSessionId,
       total_cost_usd: this.totalCostUsd,
       title: this.title,
+      description: this.description,
+      team_id: this.teamId,
     };
   }
 
@@ -347,7 +362,7 @@ export class Session {
     }
   }
 
-  private handleMcpControlRequest(parsed: Record<string, unknown>): void {
+  private async handleMcpControlRequest(parsed: Record<string, unknown>): Promise<void> {
     const requestId = parsed.request_id as string;
     const request = parsed.request as Record<string, unknown>;
     const serverName = request.server_name as string;
@@ -382,7 +397,10 @@ export class Session {
             description: 'Set the title for this session. Call this tool immediately after receiving the very first user message in every session — no exceptions. Also call it when the conversation topic changes significantly. The title should be a short, descriptive summary (3-8 words) of what the user is asking about.',
             inputSchema: {
               type: 'object',
-              properties: { title: { type: 'string', description: 'Short descriptive title for the session' } },
+              properties: {
+                title: { type: 'string', description: 'Short descriptive title for the session' },
+                description: { type: 'string', description: 'Optional longer description of what this session is doing or its role' },
+              },
               required: ['title'],
             },
           }, {
@@ -414,6 +432,36 @@ export class Session {
               },
               required: ['id'],
             },
+          }, {
+            name: MCP_TOOL_CREATE_TEAM_MEMBER,
+            description: 'Launch a new agent as a team member in the current team. You are the team lead (the agent launched by the user). The new agent shares your working directory, inherits your configuration (model, permissions), and has full access to the codebase but NO access to your conversation history.\n\nUsage pattern:\n1. Identify yourself as team lead in the prompt you send to the new member\n2. Specify a coordination mechanism — e.g., create a TEAM.md file listing roles, tasks, and status; instruct each member to read it at startup and claim/update tasks\n3. Instruct team members to send a message back to the team lead (you) when their task is complete, using the send_team_message MCP tool with your session ID\n4. The prompt must be entirely self-contained with all necessary context',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                prompt: { type: 'string', description: 'Self-contained prompt for the new team member. Include all context, file paths, and instructions. Instruct the member to use send_team_message to report back to the team lead.' },
+                title: { type: 'string', description: 'Short title for the new team member session' },
+                description: { type: 'string', description: 'Description of the team member\'s role and task' },
+              },
+              required: ['prompt'],
+            },
+          }, {
+            name: MCP_TOOL_LIST_TEAM_MEMBERS,
+            description: 'List all team members in the current team, including their id, title, description, and status.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+            },
+          }, {
+            name: MCP_TOOL_SEND_TEAM_MESSAGE,
+            description: 'Send a message to another team member by their session ID. The message will be delivered as a user message with your identity. Both sender and target must be in the same team.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                target_id: { type: 'string', description: 'Session ID of the target team member' },
+                message: { type: 'string', description: 'Message content to send' },
+              },
+              required: ['target_id', 'message'],
+            },
           }],
         },
       };
@@ -423,12 +471,22 @@ export class Session {
       if (toolName === MCP_TOOL_SET_TITLE && typeof args.title === 'string') {
         this.title = args.title;
         this.onTitleChanged?.(this.id, args.title);
-        this.pushEvent('title_changed', { title: args.title });
+        if (typeof args.description === 'string') {
+          this.description = args.description;
+          this.onDescriptionChanged?.(this.id, args.description);
+        }
+        this.pushEvent('title_changed', { title: args.title, description: this.description });
         logger.info(`Session ${this.id} title set to: ${args.title}`);
         mcpResponse = {
           jsonrpc: '2.0', id: message.id,
           result: { content: [{ type: 'text', text: `Title set to: ${args.title}` }] },
         };
+      } else if (toolName === MCP_TOOL_CREATE_TEAM_MEMBER && this.sessionManager) {
+        mcpResponse = await this.handleCreateTeamMember(message.id as number, args);
+      } else if (toolName === MCP_TOOL_LIST_TEAM_MEMBERS && this.sessionManager) {
+        mcpResponse = this.handleListTeamMembers(message.id as number);
+      } else if (toolName === MCP_TOOL_SEND_TEAM_MESSAGE && this.sessionManager) {
+        mcpResponse = this.handleSendTeamMessage(message.id as number, args);
       } else if (toolName === MCP_TOOL_SCHEDULE_TASK && this.scheduler) {
         const prompt = args.prompt as string;
         const workDir = args.working_directory as string;
@@ -506,6 +564,132 @@ export class Session {
         error,
       },
     });
+  }
+
+  private async handleCreateTeamMember(messageId: number, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const prompt = args.prompt as string;
+    if (!prompt) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32602, message: 'prompt is required' } };
+    }
+
+    // If caller has no teamId, become team lead
+    if (!this.teamId) {
+      this.teamId = this.id;
+      this.onDescriptionChanged?.(this.id, this.description || '');
+      // Persist teamId to JSONL meta
+      if (this.sessionManager) {
+        this.sessionManager.updateSessionTeamId(this.id, this.teamId);
+      }
+    }
+
+    try {
+      const memberTitle = (args.title as string) || undefined;
+      const memberDescription = (args.description as string) || undefined;
+
+      const member = await this.sessionManager!.createSession({
+        workingDirectory: this.workingDirectory,
+        model: this.sessionOpts.model,
+        permissionMode: this.sessionOpts.permissionMode,
+        additionalFlags: this.sessionOpts.additionalFlags,
+        title: memberTitle,
+        description: memberDescription,
+        teamId: this.teamId,
+      });
+
+      // Wait for session to be ready before sending prompt
+      const waitReady = (): Promise<void> => {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout waiting for session ready')), 30_000);
+          const check = () => {
+            if (member.status === 'ready' || member.status === 'waiting_for_input') {
+              clearTimeout(timeout);
+              resolve();
+            } else if (member.status === 'dead') {
+              clearTimeout(timeout);
+              reject(new Error('Session died before becoming ready'));
+            } else {
+              setTimeout(check, 200);
+            }
+          };
+          check();
+        });
+      };
+
+      await waitReady();
+
+      // Send the prompt as a user message
+      member.sendStreamJsonMessage({
+        type: 'user',
+        message: { role: 'user', content: prompt },
+      });
+
+      logger.info(`Session ${this.id} created team member ${member.id} (team ${this.teamId})`);
+      return {
+        jsonrpc: '2.0', id: messageId,
+        result: { content: [{ type: 'text', text: JSON.stringify({ id: member.id, title: memberTitle, description: memberDescription, team_id: this.teamId }) }] },
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32000, message: `Failed to create team member: ${msg}` } };
+    }
+  }
+
+  private handleListTeamMembers(messageId: number): Record<string, unknown> {
+    if (!this.teamId || !this.sessionManager) {
+      return {
+        jsonrpc: '2.0', id: messageId,
+        result: { content: [{ type: 'text', text: '[]' }] },
+      };
+    }
+
+    const members: { id: string; title?: string; description?: string; status: string }[] = [];
+    for (const s of this.sessionManager.getAllSessions()) {
+      if (s.teamId === this.teamId) {
+        members.push({ id: s.id, title: s.title, description: s.description, status: s.status });
+      }
+    }
+
+    return {
+      jsonrpc: '2.0', id: messageId,
+      result: { content: [{ type: 'text', text: JSON.stringify(members, null, 2) }] },
+    };
+  }
+
+  private handleSendTeamMessage(messageId: number, args: Record<string, unknown>): Record<string, unknown> {
+    const targetId = args.target_id as string;
+    const message = args.message as string;
+    if (!targetId || !message) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32602, message: 'target_id and message are required' } };
+    }
+
+    if (!this.teamId || !this.sessionManager) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32000, message: 'Not part of a team' } };
+    }
+
+    const target = this.sessionManager.getSession(targetId);
+    if (!target) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32000, message: `Target session ${targetId} not found` } };
+    }
+
+    if (target.teamId !== this.teamId) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32000, message: `Target session ${targetId} is not in the same team` } };
+    }
+
+    const senderLabel = this.title || this.id;
+    const ok = target.sendStreamJsonMessage({
+      type: 'user',
+      message: { role: 'user', content: `[Team message from ${senderLabel} (${this.id})]: ${message}` },
+    });
+
+    if (!ok) {
+      return { jsonrpc: '2.0', id: messageId, error: { code: -32000, message: `Failed to send message to ${targetId} (session may be dead)` } };
+    }
+
+    logger.info(`Session ${this.id} sent team message to ${targetId}`);
+    return {
+      jsonrpc: '2.0', id: messageId,
+      result: { content: [{ type: 'text', text: `Message sent to ${target.title || targetId}` }] },
+    };
   }
 
   private updateStatusFromMessage(parsed: Record<string, unknown>): void {
@@ -608,6 +792,8 @@ export class SessionManager {
     systemPrompt?: string;
     additionalFlags?: string[];
     title?: string;
+    description?: string;
+    teamId?: string;
   }): Promise<Session> {
     if (this.activeCount >= this.config.maxSessions) {
       throw new Error('Max sessions reached');
@@ -619,13 +805,15 @@ export class SessionManager {
     const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
     const session = new Session(sessionId, cwd, this.config.bufferSize, jsonlPath);
     session.title = opts.title;
+    session.description = opts.description;
+    session.teamId = opts.teamId;
     session.sessionOpts = { model: opts.model, permissionMode: opts.permissionMode, additionalFlags: opts.additionalFlags };
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
       fs.appendFileSync(jsonlPath, JSON.stringify({
         id: 0, event: 'meta', timestamp: Date.now() / 1000,
-        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title },
+        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title, description: opts.description, team_id: opts.teamId },
       }) + '\n');
     } catch (err) {
       logger.warn(`Failed to write meta to ${jsonlPath}: ${err}`);
@@ -675,11 +863,17 @@ export class SessionManager {
 
     session.attach(proc);
     session.scheduler = this.scheduler;
+    session.sessionManager = this;
     this.sessions.set(sessionId, session);
 
     // Wire up title change callback to persist to JSONL
     session.onTitleChanged = (sid, title) => {
       this.updateSessionTitle(sid, title);
+    };
+
+    // Wire up description change callback to persist to JSONL
+    session.onDescriptionChanged = (sid, description) => {
+      this.updateSessionDescription(sid, description);
     };
 
     // Send initialize control request required by --permission-prompt-tool-name stdio
@@ -729,8 +923,68 @@ export class SessionManager {
     return !!session;
   }
 
+  updateSessionDescription(id: string, description: string): boolean {
+    const session = this.sessions.get(id);
+    if (session) {
+      session.description = description;
+    }
+
+    const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
+    if (!fs.existsSync(jsonlPath)) return false;
+
+    try {
+      const content = fs.readFileSync(jsonlPath, 'utf-8');
+      const lines = content.split('\n');
+      if (lines.length > 0 && lines[0]) {
+        const meta = JSON.parse(lines[0]);
+        if (meta.event === 'meta') {
+          meta.data = meta.data || {};
+          meta.data.description = description;
+          lines[0] = JSON.stringify(meta);
+          fs.writeFileSync(jsonlPath, lines.join('\n'));
+          return true;
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed to update description for session ${id}: ${err}`);
+    }
+    return !!session;
+  }
+
   removeSession(id: string): void {
     this.sessions.delete(id);
+  }
+
+  getAllSessions(): IterableIterator<Session> {
+    return this.sessions.values();
+  }
+
+  updateSessionTeamId(id: string, teamId: string): boolean {
+    const session = this.sessions.get(id);
+    if (session) {
+      session.teamId = teamId;
+    }
+
+    const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
+    if (!fs.existsSync(jsonlPath)) return false;
+
+    try {
+      const content = fs.readFileSync(jsonlPath, 'utf-8');
+      const lines = content.split('\n');
+      if (lines.length > 0 && lines[0]) {
+        const meta = JSON.parse(lines[0]);
+        if (meta.event === 'meta') {
+          meta.data = meta.data || {};
+          meta.data.team_id = teamId;
+          lines[0] = JSON.stringify(meta);
+          fs.writeFileSync(jsonlPath, lines.join('\n'));
+          return true;
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed to update team_id for session ${id}: ${err}`);
+    }
+    return !!session;
   }
 
   /**
@@ -763,6 +1017,8 @@ export class SessionManager {
     let workingDirectory = opts?.workingDirectory || process.cwd();
     let storedFlags: string[] | undefined;
     let storedTitle: string | undefined;
+    let storedDescription: string | undefined;
+    let storedTeamId: string | undefined;
     try {
       const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
       if (firstLine) {
@@ -776,6 +1032,12 @@ export class SessionManager {
           }
           if (metaEvt.data?.title) {
             storedTitle = metaEvt.data.title;
+          }
+          if (metaEvt.data?.description) {
+            storedDescription = metaEvt.data.description;
+          }
+          if (metaEvt.data?.team_id) {
+            storedTeamId = metaEvt.data.team_id;
           }
         }
       }
@@ -797,6 +1059,8 @@ export class SessionManager {
 
     const session = new Session(sessionId, workingDirectory, this.config.bufferSize, jsonlPath);
     session.title = storedTitle;
+    session.description = storedDescription;
+    session.teamId = storedTeamId;
     session.loadBufferFromFile(jsonlPath);
 
     session.onCliSessionId = (_sid, cliSessionId) => {
@@ -836,11 +1100,17 @@ export class SessionManager {
 
     session.attach(proc);
     session.scheduler = this.scheduler;
+    session.sessionManager = this;
     this.sessions.set(sessionId, session);
 
     // Wire up title change callback to persist to JSONL
     session.onTitleChanged = (sid, title) => {
       this.updateSessionTitle(sid, title);
+    };
+
+    // Wire up description change callback to persist to JSONL
+    session.onDescriptionChanged = (sid, description) => {
+      this.updateSessionDescription(sid, description);
     };
 
     // Send initialize control request
@@ -878,6 +1148,8 @@ export class SessionManager {
         // Read working_directory and title from meta line
         let workingDirectory = process.cwd();
         let title: string | undefined;
+        let description: string | undefined;
+        let teamId: string | undefined;
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
           if (firstLine) {
@@ -888,6 +1160,12 @@ export class SessionManager {
               }
               if (metaEvt.data?.title) {
                 title = metaEvt.data.title;
+              }
+              if (metaEvt.data?.description) {
+                description = metaEvt.data.description;
+              }
+              if (metaEvt.data?.team_id) {
+                teamId = metaEvt.data.team_id;
               }
             }
           }
@@ -903,6 +1181,8 @@ export class SessionManager {
           working_directory: workingDirectory,
           cli_session_id: meta?.cliSessionId,
           title,
+          description,
+          team_id: teamId,
         });
       }
     } catch (err) {

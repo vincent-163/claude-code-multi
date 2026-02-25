@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import type { Settings, Session } from '../lib/types'
 import * as api from '../lib/api'
 
@@ -77,6 +77,62 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
 
   const statusColor = (s: string) => `status-${s}`
 
+  const { teams, standalone } = useMemo(() => {
+    const teamMap = new Map<string, Session[]>()
+    const standalone: Session[] = []
+    for (const s of sessions) {
+      if (s.team_id) {
+        const arr = teamMap.get(s.team_id) || []
+        arr.push(s)
+        teamMap.set(s.team_id, arr)
+      } else {
+        standalone.push(s)
+      }
+    }
+    // Sort teams by lead's last_active_at descending
+    const teams = Array.from(teamMap.entries()).map(([teamId, members]) => {
+      const lead = members.find((m) => m.id === teamId)
+      const others = members.filter((m) => m.id !== teamId)
+      return { teamId, lead, members: others, lastActive: lead?.last_active_at ?? Math.max(...members.map((m) => m.last_active_at)) }
+    })
+    teams.sort((a, b) => b.lastActive - a.lastActive)
+    return { teams, standalone }
+  }, [sessions])
+
+  const renderSessionCard = (s: Session, indent = false) => (
+    <div key={s.id} className="session-card" onClick={() => onOpenChat(s.id)} style={indent ? { marginLeft: 24, borderLeft: '2px solid var(--border)', opacity: 0.92 } : undefined}>
+      <div className={`status-dot ${statusColor(s.status)}`} />
+      <div className="info">
+        {editingId === s.id ? (
+          <input
+            ref={editRef}
+            className="title-edit"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={() => commitTitle(s.id)}
+            onKeyDown={(e) => handleEditKeyDown(e, s.id)}
+            onClick={(e) => e.stopPropagation()}
+            placeholder="Untitled"
+          />
+        ) : (
+          <div className="title" onClick={(e) => startEditing(e, s)}>
+            {s.title || <span className="title-placeholder">Untitled</span>}
+            {s.description && <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 8 }}>{s.description}</span>}
+          </div>
+        )}
+        <div className="dir">{s.working_directory || '~'}</div>
+        <div className="id">{s.id}</div>
+      </div>
+      <div className="meta">
+        <div>{s.status}</div>
+        {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
+      </div>
+      <button className="danger" onClick={(e) => handleDelete(e, s.id)} style={{ padding: '4px 10px', fontSize: 12 }}>
+        Delete
+      </button>
+    </div>
+  )
+
   return (
     <div className="sessions-page">
       <div className="header">
@@ -97,38 +153,14 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
             <div style={{ fontSize: 12 }}>Create a new session to get started</div>
           </div>
         )}
-        {sessions.map((s) => (
-          <div key={s.id} className="session-card" onClick={() => onOpenChat(s.id)}>
-            <div className={`status-dot ${statusColor(s.status)}`} />
-            <div className="info">
-              {editingId === s.id ? (
-                <input
-                  ref={editRef}
-                  className="title-edit"
-                  value={editValue}
-                  onChange={(e) => setEditValue(e.target.value)}
-                  onBlur={() => commitTitle(s.id)}
-                  onKeyDown={(e) => handleEditKeyDown(e, s.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  placeholder="Untitled"
-                />
-              ) : (
-                <div className="title" onClick={(e) => startEditing(e, s)}>
-                  {s.title || <span className="title-placeholder">Untitled</span>}
-                </div>
-              )}
-              <div className="dir">{s.working_directory || '~'}</div>
-              <div className="id">{s.id}</div>
-            </div>
-            <div className="meta">
-              <div>{s.status}</div>
-              {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
-            </div>
-            <button className="danger" onClick={(e) => handleDelete(e, s.id)} style={{ padding: '4px 10px', fontSize: 12 }}>
-              Delete
-            </button>
+        {teams.map(({ teamId, lead, members }) => (
+          <div key={teamId} className="team-group" style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '6px 12px 2px', fontWeight: 500 }}>Team</div>
+            {lead && renderSessionCard(lead)}
+            {members.map((m) => renderSessionCard(m, true))}
           </div>
         ))}
+        {standalone.map((s) => renderSessionCard(s))}
       </div>
 
       {showCreate && (

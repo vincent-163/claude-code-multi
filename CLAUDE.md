@@ -16,7 +16,7 @@ server/src/          # Node.js/TypeScript Express server, thin relay between Cla
   config.ts          # Config from env vars (CC_HOST, CC_PORT, CC_MAX_SESSIONS, etc.)
   auth.ts            # Bearer token auth middleware
   routes.ts          # REST + SSE endpoints: /health, /sessions CRUD, /sessions/:id/input, /sessions/:id/stream, /sessions/:id/resize
-  session.ts         # Session class (spawns `claude` CLI with stream-json), SessionManager; MCP tools: set_session_title, schedule_task, list_schedules, delete_schedule
+  session.ts         # Session class (spawns `claude` CLI with stream-json), SessionManager; MCP tools: set_session_title, schedule_task, list_schedules, delete_schedule, create_team_member, list_team_members, send_team_message
   scheduler.ts       # Scheduler: SQLite-backed task scheduling with polling; creates sessions at scheduled times
   logger.ts          # Simple custom logger (timestamp + level prefix)
 
@@ -46,7 +46,7 @@ android/app/src/main/java/com/claudecode/app/
       ConnectionScreen.kt    # SSH or Direct API connection form
       ConnectionViewModel.kt # Connect/disconnect logic
     sessions/
-      SessionsScreen.kt      # Session list + NewSessionDialog (currently only working_directory field)
+      SessionsScreen.kt      # Session list grouped by team + NewSessionDialog
       SessionsViewModel.kt   # List/create/delete sessions via ApiClient
     chat/
       ChatScreen.kt          # Chat UI: message list, input bar, renders text/tool_use/results/permission approvals/AskUserQuestion interactive options/PlanModeExit approval/editable session title
@@ -71,7 +71,7 @@ web/src/                     # React/TypeScript web SPA
     settings.ts            # Settings persistence to localStorage
   components/
     ChatPage.tsx           # Chat UI: message list, input bar, control_request approval, AskUserQuestion interactive UI, ExitPlanMode approval, editable session title
-    SessionsPage.tsx       # Session list + create dialog
+    SessionsPage.tsx       # Session list grouped by team + create dialog
     SettingsPage.tsx       # API URL, auth token, default model settings
     AnsiText.tsx           # ANSI-aware text renderer
 ```
@@ -84,6 +84,7 @@ web/src/                     # React/TypeScript web SPA
 - **AskUserQuestion**: When Claude calls the `AskUserQuestion` tool, it appears as a `tool_use` block (name=AskUserQuestion) in an assistant message. The parser extracts these into separate `ask_user_question` (web) / `ChatMessage.AskUserQuestion` (Android) messages rendered as interactive option-selection UI. User answers are sent back as `type=tool_result` with the matching `tool_use_id` and content `{"answers":{"0":"selected_label",...}}`. Both web and Android support single-select, multi-select, and "Other" free-text options.
 - **ExitPlanMode**: When Claude calls `ExitPlanMode`, it appears as a `tool_use` block (name=ExitPlanMode) in an assistant message. The parser extracts these into separate `plan_mode_exit` (web) / `ChatMessage.PlanModeExit` (Android) messages rendered with an "Approve" button. Approval sends back a `type=tool_result` with the matching `tool_use_id` and empty JSON content `{}`.
 - **Scheduling**: Claude can schedule future tasks via MCP tools (`schedule_task`, `list_schedules`, `delete_schedule`). Tasks are stored in SQLite (`sessions/scheduler.db`). A 5-second polling loop checks for due tasks and launches new sessions with the scheduled prompt. `list_schedules` and `delete_schedule` are scoped to subdirectories of the calling session's working directory.
+- **Agent Teams**: Claude can spawn team members via `create_team_member` MCP tool. The first session to create a member becomes the team lead (teamId = own id). Members inherit the lead's working directory and session config (model, permissions, flags). `list_team_members` returns all sessions in the same team. `send_team_message` delivers a user message to another team member with sender identity. Sessions have optional `description` field (settable via `set_session_title`). Both web and Android frontends group team sessions together in the session list.
 
 ## Workflow
 

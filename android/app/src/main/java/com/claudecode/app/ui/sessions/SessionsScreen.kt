@@ -135,11 +135,47 @@ fun SessionsScreen(
                     )
                 }
             } else {
+                val teamMap = sessions.filter { it.teamId != null }.groupBy { it.teamId!! }
+                val standalone = sessions.filter { it.teamId == null }
+                val teamEntries = teamMap.entries.sortedByDescending { entry ->
+                    entry.value.find { it.id == entry.key }?.lastActiveAt
+                        ?: entry.value.maxOfOrNull { it.lastActiveAt ?: 0.0 } ?: 0.0
+                }
+
                 LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(sessions, key = { it.id }) { session ->
+                    teamEntries.forEach { (teamId, members) ->
+                        item(key = "team-header-$teamId") {
+                            Text(
+                                "Team",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextSecondary,
+                                modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp)
+                            )
+                        }
+                        val lead = members.find { it.id == teamId }
+                        val others = members.filter { it.id != teamId }
+                        if (lead != null) {
+                            item(key = lead.id) {
+                                SessionCard(
+                                    session = lead,
+                                    onClick = { onSessionSelected(lead.id) },
+                                    onDelete = { viewModel.deleteSession(lead.id) }
+                                )
+                            }
+                        }
+                        items(others, key = { it.id }) { session ->
+                            SessionCard(
+                                session = session,
+                                onClick = { onSessionSelected(session.id) },
+                                onDelete = { viewModel.deleteSession(session.id) },
+                                indent = true
+                            )
+                        }
+                    }
+                    items(standalone, key = { it.id }) { session ->
                         SessionCard(
                             session = session,
                             onClick = { onSessionSelected(session.id) },
@@ -173,11 +209,14 @@ fun SessionsScreen(
 private fun SessionCard(
     session: Session,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    indent: Boolean = false
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (indent) Modifier.padding(start = 24.dp) else Modifier),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         )

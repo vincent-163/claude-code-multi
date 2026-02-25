@@ -12,6 +12,8 @@ export interface Session {
   cli_session_id?: string;
   total_cost_usd?: number;
   title?: string;
+  description?: string;
+  team_id?: string;
 }
 
 // --- Chat Messages ---
