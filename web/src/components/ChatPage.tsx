@@ -45,11 +45,20 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [editTitleValue, setEditTitleValue] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const lastEventIdRef = useRef(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isNearBottomRef = useRef(true)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [])
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesContainerRef.current
+    if (!el) return
+    const threshold = 80
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
   }, [])
 
   useEffect(() => {
@@ -213,8 +222,10 @@ export default function ChatPage({ settings, onBack }: Props) {
     return () => { sseCleanup?.() }
   }, [sessionId, settings])
 
-  // Auto-scroll on new messages
-  useEffect(() => { scrollToBottom() }, [messages, scrollToBottom])
+  // Auto-scroll on new messages only when user is near the bottom
+  useEffect(() => {
+    if (isNearBottomRef.current) scrollToBottom()
+  }, [messages, scrollToBottom])
 
   const sendMessage = async () => {
     const text = input.trim()
@@ -355,7 +366,7 @@ export default function ChatPage({ settings, onBack }: Props) {
 
       {sseError && <div style={{ padding: '6px 16px', color: 'var(--red)', fontSize: 12 }}>{sseError}</div>}
 
-      <div className="messages">
+      <div className="messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {messages.map((msg, i) => (
           <MessageView key={i} msg={msg} onApprove={approveRequest} onDeny={denyRequest} onAnswer={answerQuestion} onApprovePlanExit={approvePlanExit} pendingResponses={pendingResponses} resolvedRequests={resolvedRequests} answeredQuestions={answeredQuestions} resolvedPlanExits={resolvedPlanExits} />
         ))}

@@ -23,7 +23,7 @@ export function loadConfig(): Config {
     claudeCmd: process.env.CC_CLAUDE_CMD || 'claude',
     authTokens,
     bufferSize: parseInt(process.env.CC_BUFFER_SIZE || '1000', 10),
-    sessionTimeoutSec: parseInt(process.env.CC_SESSION_TIMEOUT || '3600', 10),
+    sessionTimeoutSec: parseInt(process.env.CC_SESSION_TIMEOUT || '3600000', 10),
     logLevel: process.env.CC_LOG_LEVEL || 'info',
     sessionsDir: process.env.CC_SESSIONS_DIR || 'sessions',
   };
