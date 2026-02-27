@@ -41,6 +41,18 @@ export class Session {
 
   totalCostUsd: number = 0;
 
+  /** Context window tracking */
+  contextWindowSize: number = 200000;
+  contextUsage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+  } = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  contextUsedPct: number = 0;
+  autoCompactThreshold: number = 0;
+  private autoCompactPending: boolean = false;
+
   /** Session creation options, used to propagate to scheduled tasks */
   sessionOpts: { model?: string; permissionMode?: string; additionalFlags?: string[] } = {};
 
@@ -254,6 +266,9 @@ export class Session {
       pid: this.pid,
       cli_session_id: this.cliSessionId,
       total_cost_usd: this.totalCostUsd,
+      context_window_size: this.contextWindowSize,
+      context_used_pct: this.contextUsedPct,
+      context_usage: this.contextUsage,
       title: this.title,
       description: this.description,
       team_id: this.teamId,
@@ -727,8 +742,68 @@ export class Session {
         this.totalCostUsd = totalCost;
       }
 
+      // Track context usage from the usage field
+      this.updateContextUsage(parsed);
+
       // Auto-forward final message to parent (team lead) if this is a team member
       this.forwardResultToParent(parsed);
+    }
+  }
+
+  /**
+   * Extract token usage from result message and check auto-compact threshold.
+   */
+  private updateContextUsage(parsed: Record<string, unknown>): void {
+    const usage = parsed.usage as Record<string, number> | undefined;
+    if (!usage) return;
+
+    this.contextUsage = {
+      input_tokens: usage.input_tokens || 0,
+      output_tokens: usage.output_tokens || 0,
+      cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+      cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+    };
+
+    const inputTotal = this.contextUsage.input_tokens
+      + this.contextUsage.cache_creation_input_tokens
+      + this.contextUsage.cache_read_input_tokens;
+    this.contextUsedPct = Math.round((inputTotal / this.contextWindowSize) * 100);
+
+    // Emit context_usage event so clients can display it
+    this.pushEvent('context_usage', {
+      context_window_size: this.contextWindowSize,
+      used_percentage: this.contextUsedPct,
+      usage: this.contextUsage,
+    });
+
+    // Auto-compact if threshold exceeded
+    if (
+      this.autoCompactThreshold > 0 &&
+      this.contextUsedPct >= this.autoCompactThreshold &&
+      !this.autoCompactPending
+    ) {
+      this.autoCompactPending = true;
+      logger.info(
+        `Session ${this.id} context at ${this.contextUsedPct}% (threshold ${this.autoCompactThreshold}%), sending /compact`,
+      );
+      // Small delay to let the result message finish processing
+      setTimeout(() => {
+        const ok = this.sendStreamJsonMessage({
+          type: 'user',
+          message: { role: 'user', content: '/compact' },
+        });
+        if (ok) {
+          this.pushEvent('message', {
+            type: 'system',
+            subtype: 'auto_compact',
+            message: `Auto-compact triggered at ${this.contextUsedPct}% context usage`,
+          });
+        } else {
+          logger.warn(`Session ${this.id} failed to send auto-compact`);
+        }
+        // Reset after compact completes (next result will re-evaluate)
+        this.autoCompactPending = false;
+      }, 500);
     }
   }
 
@@ -841,6 +916,8 @@ export class SessionManager {
     const sessionId = 'sess_' + randomUUID().replace(/-/g, '').slice(0, 12);
     const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
     const session = new Session(sessionId, cwd, this.config.bufferSize, jsonlPath);
+    session.contextWindowSize = this.config.contextWindowSize;
+    session.autoCompactThreshold = this.config.autoCompactThreshold;
     session.title = opts.title;
     session.description = opts.description;
     session.teamId = opts.teamId;
@@ -1095,6 +1172,8 @@ export class SessionManager {
     }
 
     const session = new Session(sessionId, workingDirectory, this.config.bufferSize, jsonlPath);
+    session.contextWindowSize = this.config.contextWindowSize;
+    session.autoCompactThreshold = this.config.autoCompactThreshold;
     session.title = storedTitle;
     session.description = storedDescription;
     session.teamId = storedTeamId;
