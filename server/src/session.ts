@@ -718,6 +718,14 @@ export class Session {
         this.status = 'busy';
         this.pushEvent('status', { status: 'busy' });
       }
+      // Track context usage from per-API-call usage in assistant messages.
+      // Unlike result messages (which have cumulative usage across all API calls
+      // in a turn), assistant messages report per-call usage that accurately
+      // reflects the actual context window occupancy.
+      const msg = parsed.message as Record<string, unknown> | undefined;
+      if (msg?.usage) {
+        this.updateContextUsage(msg.usage as Record<string, number>);
+      }
     } else if (type === 'control_request') {
       // CLI is asking for permission
       const request = parsed.request as Record<string, unknown> | undefined;
@@ -742,8 +750,9 @@ export class Session {
         this.totalCostUsd = totalCost;
       }
 
-      // Track context usage from the usage field
-      this.updateContextUsage(parsed);
+      // Check auto-compact threshold now that the turn is complete.
+      // Context usage was already tracked from assistant messages during the turn.
+      this.checkAutoCompact();
 
       // Auto-forward final message to parent (team lead) if this is a team member
       this.forwardResultToParent(parsed);
@@ -751,22 +760,26 @@ export class Session {
   }
 
   /**
-   * Extract token usage from result message and check auto-compact threshold.
+   * Update context usage tracking from per-API-call usage in an assistant message.
+   * Skips zero-usage updates to avoid resetting tracking state.
    */
-  private updateContextUsage(parsed: Record<string, unknown>): void {
-    const usage = parsed.usage as Record<string, number> | undefined;
-    if (!usage) return;
+  private updateContextUsage(usage: Record<string, number>): void {
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+    const cacheCreation = usage.cache_creation_input_tokens || 0;
+    const cacheRead = usage.cache_read_input_tokens || 0;
+
+    // Skip zero-usage updates (e.g. empty results) to avoid resetting context tracking
+    if (inputTokens === 0 && cacheCreation === 0 && cacheRead === 0) return;
 
     this.contextUsage = {
-      input_tokens: usage.input_tokens || 0,
-      output_tokens: usage.output_tokens || 0,
-      cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-      cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cache_creation_input_tokens: cacheCreation,
+      cache_read_input_tokens: cacheRead,
     };
 
-    const inputTotal = this.contextUsage.input_tokens
-      + this.contextUsage.cache_creation_input_tokens
-      + this.contextUsage.cache_read_input_tokens;
+    const inputTotal = inputTokens + cacheCreation + cacheRead;
     this.contextUsedPct = Math.round((inputTotal / this.contextWindowSize) * 100);
 
     // Emit context_usage event so clients can display it
@@ -775,8 +788,13 @@ export class Session {
       used_percentage: this.contextUsedPct,
       usage: this.contextUsage,
     });
+  }
 
-    // Auto-compact if threshold exceeded
+  /**
+   * Check auto-compact threshold and send /compact if exceeded.
+   * Called after a turn completes (result message) so the CLI is ready to process it.
+   */
+  private checkAutoCompact(): void {
     if (
       this.autoCompactThreshold > 0 &&
       this.contextUsedPct >= this.autoCompactThreshold &&
