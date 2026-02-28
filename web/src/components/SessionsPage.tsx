@@ -2,6 +2,16 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import type { Settings, Session } from '../lib/types'
 import * as api from '../lib/api'
 
+function formatElapsed(epochSec: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - epochSec))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${m % 60}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
 interface Props {
   settings: Settings
   onOpenChat: (sessionId: string) => void
@@ -31,6 +41,13 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
   }, [settings])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Tick every second to update elapsed times
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
 
   useEffect(() => {
     if (editingId && editRef.current) {
@@ -126,6 +143,11 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
       <div className="meta">
         <div>{s.status}</div>
         {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
+        <div style={{ fontSize: 11 }}>
+          {s.last_user_message_at ? `👤 ${formatElapsed(s.last_user_message_at)}` : ''}
+          {s.last_user_message_at && s.last_assistant_message_at ? ' · ' : ''}
+          {s.last_assistant_message_at ? `🤖 ${formatElapsed(s.last_assistant_message_at)}` : ''}
+        </div>
       </div>
       <button className="danger" onClick={(e) => handleDelete(e, s.id)} style={{ padding: '4px 10px', fontSize: 12 }}>
         Delete

@@ -343,7 +343,9 @@ private data class SessionResponse(
     @SerializedName("total_cost_usd") val totalCostUsd: Double?,
     val title: String?,
     val description: String?,
-    @SerializedName("team_id") val teamId: String?
+    @SerializedName("team_id") val teamId: String?,
+    @SerializedName("last_user_message_at") val lastUserMessageAt: Double?,
+    @SerializedName("last_assistant_message_at") val lastAssistantMessageAt: Double?
 ) {
     fun toSession() = Session(
         id = id,
@@ -355,7 +357,9 @@ private data class SessionResponse(
         totalCostUsd = totalCostUsd,
         title = title,
         description = description,
-        teamId = teamId
+        teamId = teamId,
+        lastUserMessageAt = lastUserMessageAt,
+        lastAssistantMessageAt = lastAssistantMessageAt
     )
 }
 
@@ -371,6 +375,8 @@ data class SessionDetailResponse(
     val description: String?,
     @SerializedName("team_id") val teamId: String?,
     val history: List<Map<String, Any>>?,
+    @SerializedName("last_user_message_at") val lastUserMessageAt: Double?,
+    @SerializedName("last_assistant_message_at") val lastAssistantMessageAt: Double?,
     @Transient val rawHistory: List<JsonObject> = emptyList()
 ) {
     fun toSession() = Session(
@@ -383,6 +389,8 @@ data class SessionDetailResponse(
         totalCostUsd = totalCostUsd,
         title = title,
         description = description,
-        teamId = teamId
+        teamId = teamId,
+        lastUserMessageAt = lastUserMessageAt,
+        lastAssistantMessageAt = lastAssistantMessageAt
     )
 }

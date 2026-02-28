@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,6 +57,7 @@ import com.claudecode.app.ui.theme.AccentGreen
 import com.claudecode.app.ui.theme.AccentOrange
 import com.claudecode.app.ui.theme.AccentRed
 import com.claudecode.app.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -212,6 +214,17 @@ private fun SessionCard(
     onDelete: () -> Unit,
     indent: Boolean = false
 ) {
+    // Tick every second to update elapsed times
+    var tick by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(1000)
+            tick++
+        }
+    }
+    // Use tick to force recomposition
+    @Suppress("UNUSED_EXPRESSION") tick
+
     Card(
         onClick = onClick,
         modifier = Modifier
@@ -281,6 +294,17 @@ private fun SessionCard(
                             )
                         }
                     }
+                }
+                // Elapsed time since last user/assistant message
+                val elapsedParts = mutableListOf<String>()
+                session.lastUserMessageAt?.let { elapsedParts.add("👤 ${formatElapsed(it)}") }
+                session.lastAssistantMessageAt?.let { elapsedParts.add("🤖 ${formatElapsed(it)}") }
+                if (elapsedParts.isNotEmpty()) {
+                    Text(
+                        elapsedParts.joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextSecondary
+                    )
                 }
             }
             IconButton(onClick = onDelete) {
@@ -364,4 +388,14 @@ private fun NewSessionDialog(
             }
         }
     )
+}
+
+private fun formatElapsed(epochSec: Double): String {
+    val s = maxOf(0L, (System.currentTimeMillis() / 1000 - epochSec).toLong())
+    if (s < 60) return "${s}s"
+    val m = s / 60
+    if (m < 60) return "${m}m"
+    val h = m / 60
+    if (h < 24) return "${h}h ${m % 60}m"
+    return "${h / 24}d ${h % 24}h"
 }

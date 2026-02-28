@@ -14,6 +14,8 @@ export interface Session {
   title?: string;
   description?: string;
   team_id?: string;
+  last_user_message_at?: number;
+  last_assistant_message_at?: number;
 }
 
 // --- Chat Messages ---

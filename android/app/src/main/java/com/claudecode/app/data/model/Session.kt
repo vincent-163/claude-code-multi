@@ -10,7 +10,9 @@ data class Session(
     val totalCostUsd: Double? = null,
     val title: String? = null,
     val description: String? = null,
-    val teamId: String? = null
+    val teamId: String? = null,
+    val lastUserMessageAt: Double? = null,
+    val lastAssistantMessageAt: Double? = null
 )
 
 enum class SessionStatus {

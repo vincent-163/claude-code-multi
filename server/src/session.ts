@@ -40,6 +40,8 @@ export class Session {
   teamId: string | undefined;
 
   totalCostUsd: number = 0;
+  lastUserMessageAt: number | undefined;
+  lastAssistantMessageAt: number | undefined;
 
   /** Context window tracking */
   contextWindowSize: number = 200000;
@@ -206,6 +208,9 @@ export class Session {
   }
 
   sendStreamJsonMessage(msg: Record<string, unknown>): boolean {
+    if (msg.type === 'user') {
+      this.lastUserMessageAt = Date.now() / 1000;
+    }
     return this.sendInput(JSON.stringify(msg));
   }
 
@@ -272,6 +277,8 @@ export class Session {
       title: this.title,
       description: this.description,
       team_id: this.teamId,
+      last_user_message_at: this.lastUserMessageAt,
+      last_assistant_message_at: this.lastAssistantMessageAt,
     };
   }
 
@@ -287,6 +294,8 @@ export class Session {
       title: this.title,
       description: this.description,
       team_id: this.teamId,
+      last_user_message_at: this.lastUserMessageAt,
+      last_assistant_message_at: this.lastAssistantMessageAt,
     };
   }
 
@@ -714,6 +723,7 @@ export class Session {
 
     if (type === 'assistant') {
       // CLI is generating a response
+      this.lastAssistantMessageAt = Date.now() / 1000;
       if (this.status !== 'dead') {
         this.status = 'busy';
         this.pushEvent('status', { status: 'busy' });
