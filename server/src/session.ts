@@ -762,7 +762,14 @@ export class Session {
 
       // Check auto-compact threshold now that the turn is complete.
       // Context usage was already tracked from assistant messages during the turn.
-      this.checkAutoCompact();
+      // Skip if this result has zero usage (e.g. compact result) to avoid re-triggering.
+      const resultUsage = parsed.usage as Record<string, number> | undefined;
+      const hasUsage = resultUsage && (
+        (resultUsage.input_tokens || 0) + (resultUsage.cache_creation_input_tokens || 0) + (resultUsage.cache_read_input_tokens || 0) > 0
+      );
+      if (hasUsage) {
+        this.checkAutoCompact();
+      }
 
       // Auto-forward final message to parent (team lead) if this is a team member
       this.forwardResultToParent(parsed);
