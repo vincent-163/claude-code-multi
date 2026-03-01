@@ -23,6 +23,7 @@ function AppRoutes() {
           element={
             <SessionsPage
               settings={settings}
+              onUpdateSettings={updateSettings}
               onOpenChat={(id) => navigate(`/chat/${id}`)}
               onOpenSettings={() => navigate('/settings')}
             />

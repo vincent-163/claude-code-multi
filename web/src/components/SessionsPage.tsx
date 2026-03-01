@@ -14,11 +14,12 @@ function formatElapsed(epochSec: number): string {
 
 interface Props {
   settings: Settings
+  onUpdateSettings: (s: Settings) => void
   onOpenChat: (sessionId: string) => void
   onOpenSettings: () => void
 }
 
-export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: Props) {
+export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, onOpenSettings }: Props) {
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -188,6 +189,7 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
       {showCreate && (
         <CreateSessionDialog
           settings={settings}
+          onUpdateSettings={onUpdateSettings}
           onCreated={(s) => { setShowCreate(false); onOpenChat(s.id) }}
           onClose={() => setShowCreate(false)}
         />
@@ -196,8 +198,9 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
   )
 }
 
-function CreateSessionDialog({ settings, onCreated, onClose }: {
+function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }: {
   settings: Settings
+  onUpdateSettings: (s: Settings) => void
   onCreated: (s: Session) => void
   onClose: () => void
 }) {
@@ -208,6 +211,11 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
   const [flags, setFlags] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (workDir === settings.defaultWorkingDirectory) return
+    onUpdateSettings({ ...settings, defaultWorkingDirectory: workDir })
+  }, [workDir, onUpdateSettings, settings])
 
   const handleCreate = async () => {
     setCreating(true)
@@ -253,6 +261,9 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
         <div className="field">
           <label>Working Directory</label>
           <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="/path/to/project" />
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+            Auto-saved and shared for Codex and Claude.
+          </div>
         </div>
         <div className="field">
           <label>Model</label>
