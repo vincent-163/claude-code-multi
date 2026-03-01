@@ -204,6 +204,7 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
   const [workDir, setWorkDir] = useState(settings.defaultWorkingDirectory)
   const [model, setModel] = useState(settings.defaultModel)
   const [backend, setBackend] = useState<Backend>(settings.defaultBackend)
+  const [resumeConversationId, setResumeConversationId] = useState('')
   const [skipPerms, setSkipPerms] = useState(false)
   const [flags, setFlags] = useState('')
   const [creating, setCreating] = useState(false)
@@ -216,6 +217,7 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
       const session = await api.createSession(settings, {
         working_directory: workDir || undefined,
         model: model || undefined,
+        resume_conversation_id: backend === 'codex' ? (resumeConversationId.trim() || undefined) : undefined,
         dangerously_skip_permissions: skipPerms,
         additional_flags: flags ? flags.split(/\s+/).filter(Boolean) : undefined,
         backend,
@@ -258,6 +260,16 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
           <label>Model</label>
           <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={backend === 'codex' ? 'gpt-5.3-codex' : 'claude-opus-4-6'} />
         </div>
+        {backend === 'codex' && (
+          <div className="field">
+            <label>Resume Thread ID</label>
+            <input
+              value={resumeConversationId}
+              onChange={(e) => setResumeConversationId(e.target.value)}
+              placeholder="thread_xxx (optional)"
+            />
+          </div>
+        )}
         <div className="field">
           <label>Extra Flags</label>
           <input value={flags} onChange={(e) => setFlags(e.target.value)} placeholder="--flag1 --flag2" />

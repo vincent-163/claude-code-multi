@@ -28,6 +28,7 @@ export async function createSession(
   opts: {
     working_directory?: string;
     model?: string;
+    resume_conversation_id?: string;
     dangerously_skip_permissions?: boolean;
     additional_flags?: string[];
     backend?: string;

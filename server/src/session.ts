@@ -1465,12 +1465,17 @@ export class SessionManager {
 
     if (backend === 'codex') {
       // Codex backend: don't spawn process now; wait for first user message
+      const initialThreadId = opts.resumeConversationId?.trim() || undefined;
       session.codexConfig = {
         apiKey: this.config.codexApiKey,
         baseUrl: this.config.codexBaseUrl,
         cmd: this.config.codexCmd,
         model: opts.model,
       };
+      if (initialThreadId) {
+        session.codexThreadId = initialThreadId;
+        session.cliSessionId = initialThreadId;
+      }
 
       // Set session to ready immediately — no persistent process
       session.status = 'ready';
@@ -1681,9 +1686,11 @@ export class SessionManager {
     // For codex sessions, cliSessionId may not exist yet (no thread started)
     // We'll check the backend below to handle this correctly
 
-    // Read working_directory, additional_flags, and title from the meta line
+    // Read values from the meta line
     let workingDirectory = opts?.workingDirectory || process.cwd();
     let storedFlags: string[] | undefined;
+    let storedModel: string | undefined;
+    let storedResumeConversationId: string | undefined;
     let storedTitle: string | undefined;
     let storedDescription: string | undefined;
     let storedTeamId: string | undefined;
@@ -1698,6 +1705,12 @@ export class SessionManager {
           }
           if (Array.isArray(metaEvt.data?.additional_flags)) {
             storedFlags = metaEvt.data.additional_flags;
+          }
+          if (typeof metaEvt.data?.model === 'string') {
+            storedModel = metaEvt.data.model;
+          }
+          if (typeof metaEvt.data?.resume_conversation_id === 'string') {
+            storedResumeConversationId = metaEvt.data.resume_conversation_id;
           }
           if (metaEvt.data?.title) {
             storedTitle = metaEvt.data.title;
@@ -1734,6 +1747,11 @@ export class SessionManager {
     session.description = storedDescription;
     session.teamId = storedTeamId;
     session.backend = storedBackend;
+    session.sessionOpts = {
+      model: opts?.model || storedModel,
+      permissionMode: opts?.permissionMode,
+      additionalFlags: opts?.additionalFlags || storedFlags,
+    };
     session.loadBufferFromFile(jsonlPath);
 
     session.onCliSessionId = (_sid, cliSessionId) => {
@@ -1742,13 +1760,14 @@ export class SessionManager {
 
     if (storedBackend === 'codex') {
       // Codex backend: restore state without spawning a process
-      session.codexThreadId = meta?.cliSessionId || undefined;
-      session.cliSessionId = meta?.cliSessionId || undefined;
+      const restoredThreadId = meta?.cliSessionId || storedResumeConversationId || undefined;
+      session.codexThreadId = restoredThreadId;
+      session.cliSessionId = restoredThreadId;
       session.codexConfig = {
         apiKey: this.config.codexApiKey,
         baseUrl: this.config.codexBaseUrl,
         cmd: this.config.codexCmd,
-        model: opts?.model,
+        model: opts?.model || storedModel,
       };
       session.status = 'ready';
       session.scheduler = this.scheduler;
@@ -1762,7 +1781,7 @@ export class SessionManager {
         this.updateSessionDescription(sid, description);
       };
 
-      logger.info(`Resumed codex session ${sessionId} with thread_id ${meta?.cliSessionId || 'none'}`);
+      logger.info(`Resumed codex session ${sessionId} with thread_id ${restoredThreadId || 'none'}`);
       return session;
     }
 
@@ -1856,6 +1875,7 @@ export class SessionManager {
         let title: string | undefined;
         let description: string | undefined;
         let teamId: string | undefined;
+        let resumeConversationId: string | undefined;
         let backend: string = 'claude';
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
@@ -1874,6 +1894,9 @@ export class SessionManager {
               if (metaEvt.data?.team_id) {
                 teamId = metaEvt.data.team_id;
               }
+              if (metaEvt.data?.resume_conversation_id) {
+                resumeConversationId = metaEvt.data.resume_conversation_id;
+              }
               if (metaEvt.data?.backend) {
                 backend = metaEvt.data.backend;
               }
@@ -1889,7 +1912,7 @@ export class SessionManager {
           created_at: meta?.createdAt || 0,
           last_active_at: meta?.lastActiveAt || 0,
           working_directory: workingDirectory,
-          cli_session_id: meta?.cliSessionId,
+          cli_session_id: meta?.cliSessionId || resumeConversationId,
           title,
           description,
           team_id: teamId,

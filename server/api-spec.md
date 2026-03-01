@@ -55,7 +55,7 @@ POST /sessions
 }
 ```
 
-All fields are optional. `working_directory` defaults to the server's CWD. `model` is passed to `claude` via `--model`. `resume_conversation_id` resumes a prior conversation. `permission_mode` sets the permission mode (default, plan, bypassPermissions, etc.).
+All fields are optional. `working_directory` defaults to the server's CWD. `model` is passed to `claude` via `--model` and to `codex` via `-m`. `resume_conversation_id` resumes a prior conversation (`--resume` for Claude, `thread_id` resume for Codex). `permission_mode` sets the permission mode (default, plan, bypassPermissions, etc.).
 
 **Response** `201 Created`:
 ```json
