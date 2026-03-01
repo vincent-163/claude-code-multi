@@ -283,8 +283,11 @@ export class Session {
       args.push('-m', this.codexConfig.model);
     }
 
+    // -C/--cd is only supported by `codex exec`, not `codex exec resume`
+    if (!isResume) {
+      args.push('-C', this.workingDirectory);
+    }
     args.push(
-      '-C', this.workingDirectory,
       '--dangerously-bypass-approvals-and-sandbox',
       '--skip-git-repo-check',
     );
