@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import type { Settings, ChatMessage, SessionStatus, ContentBlock } from '../lib/types'
+import type { Settings, ChatMessage, SessionStatus, ContentBlock, Backend } from '../lib/types'
 import * as api from '../lib/api'
 import { connectSse } from '../lib/sse'
 import { parseEvents } from '../lib/parse'
@@ -41,6 +41,7 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [answeredQuestions, setAnsweredQuestions] = useState<Set<string>>(new Set())
   const [resolvedPlanExits, setResolvedPlanExits] = useState<Set<string>>(new Set())
   const [title, setTitle] = useState<string | undefined>(undefined)
+  const [sessionBackend, setSessionBackend] = useState<Backend | undefined>(undefined)
   const [editingTitle, setEditingTitle] = useState(false)
   const [editTitleValue, setEditTitleValue] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -99,6 +100,7 @@ export default function ChatPage({ settings, onBack }: Props) {
           const data = await api.getSession(settings, sessionId, 1000)
           setStatus(data.status)
           if (data.title) setTitle(data.title)
+          if (data.backend) setSessionBackend(data.backend as Backend)
           if (data.total_cost_usd) setCost(data.total_cost_usd)
 
           // Parse history
@@ -360,6 +362,7 @@ export default function ChatPage({ settings, onBack }: Props) {
           )}
           <div className="subtitle">{cost > 0 ? `$${cost.toFixed(4)}` : ''}</div>
         </div>
+        {sessionBackend && <span className="status-badge" style={{ background: sessionBackend === 'codex' ? 'var(--blue)' : 'var(--green)', color: '#000', marginRight: 4 }}>{sessionBackend === 'codex' ? 'Codex' : 'Claude'}</span>}
         <span className="status-badge" style={statusBadgeStyle}>{status}</span>
         {isBusy && <button className="danger" onClick={sendInterrupt} style={{ padding: '4px 10px', fontSize: 12 }}>Interrupt</button>}
       </div>

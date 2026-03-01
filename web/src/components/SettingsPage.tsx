@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Settings } from '../lib/types'
+import type { Settings, Backend } from '../lib/types'
 
 interface Props {
   settings: Settings
@@ -12,9 +12,10 @@ export default function SettingsPage({ settings, onSave, onBack }: Props) {
   const [authToken, setAuthToken] = useState(settings.authToken)
   const [defaultModel, setDefaultModel] = useState(settings.defaultModel)
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState(settings.defaultWorkingDirectory)
+  const [defaultBackend, setDefaultBackend] = useState<Backend>(settings.defaultBackend)
 
   const handleSave = () => {
-    onSave({ apiUrl, authToken, defaultModel, defaultWorkingDirectory })
+    onSave({ apiUrl, authToken, defaultModel, defaultWorkingDirectory, defaultBackend })
   }
 
   return (
@@ -33,8 +34,27 @@ export default function SettingsPage({ settings, onSave, onBack }: Props) {
         <input type="password" value={authToken} onChange={(e) => setAuthToken(e.target.value)} placeholder="Leave empty if auth disabled" />
       </div>
       <div className="field">
+        <label>Default Backend</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className={defaultBackend === 'codex' ? 'primary' : ''}
+            onClick={() => setDefaultBackend('codex')}
+            style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+          >
+            Codex
+          </button>
+          <button
+            className={defaultBackend === 'claude' ? 'primary' : ''}
+            onClick={() => setDefaultBackend('claude')}
+            style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+          >
+            Claude
+          </button>
+        </div>
+      </div>
+      <div className="field">
         <label>Default Model</label>
-        <input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} placeholder="e.g. claude-opus-4-6" />
+        <input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} placeholder={defaultBackend === 'codex' ? 'gpt-5.3-codex' : 'claude-opus-4-6'} />
       </div>
       <div className="field">
         <label>Default Working Directory</label>

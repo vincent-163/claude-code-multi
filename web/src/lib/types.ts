@@ -2,6 +2,8 @@
 
 export type SessionStatus = 'starting' | 'ready' | 'busy' | 'waiting_for_input' | 'dead' | 'destroyed';
 
+export type Backend = 'claude' | 'codex';
+
 export interface Session {
   id: string;
   status: SessionStatus;
@@ -14,6 +16,7 @@ export interface Session {
   title?: string;
   description?: string;
   team_id?: string;
+  backend?: Backend;
   last_user_message_at?: number;
   last_assistant_message_at?: number;
 }
@@ -156,4 +159,5 @@ export interface Settings {
   authToken: string;
   defaultModel: string;
   defaultWorkingDirectory: string;
+  defaultBackend: Backend;
 }

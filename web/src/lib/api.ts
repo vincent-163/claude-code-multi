@@ -30,6 +30,7 @@ export async function createSession(
     model?: string;
     dangerously_skip_permissions?: boolean;
     additional_flags?: string[];
+    backend?: string;
   },
 ): Promise<Session> {
   const res = await fetch(`${baseUrl(settings)}/sessions`, {

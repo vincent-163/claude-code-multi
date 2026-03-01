@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { createInterface, Interface } from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
-import { Config } from './config';
+import { Config, Backend } from './config';
 import { logger } from './logger';
 import type { Scheduler } from './scheduler';
 
@@ -38,6 +38,15 @@ export class Session {
   title: string | undefined;
   description: string | undefined;
   teamId: string | undefined;
+  backend: Backend = 'claude';
+
+  /** Codex thread_id for resuming conversations (codex backend only) */
+  codexThreadId: string | undefined;
+  /** Current turn's process for codex backend (one process per turn) */
+  private codexTurnProcess: ChildProcess | null = null;
+  private codexTurnRl: Interface | null = null;
+  /** Config reference for codex environment vars */
+  codexConfig: { apiKey: string; baseUrl: string; cmd: string; model?: string } = { apiKey: '', baseUrl: '', cmd: 'codex' };
 
   totalCostUsd: number = 0;
   lastUserMessageAt: number | undefined;
@@ -211,10 +220,34 @@ export class Session {
     if (msg.type === 'user') {
       this.lastUserMessageAt = Date.now() / 1000;
     }
+    // For codex backend, intercept user messages and spawn a new exec process
+    if (this.backend === 'codex' && msg.type === 'user') {
+      const userMsg = msg.message as Record<string, unknown> | undefined;
+      const content = typeof userMsg?.content === 'string' ? userMsg.content : '';
+      if (content) {
+        this.sendCodexMessage(content);
+        return true;
+      }
+      return false;
+    }
+    // For codex backend, control_response and tool_result are no-ops
+    if (this.backend === 'codex' && (msg.type === 'control_response' || msg.type === 'control_request' || msg.type === 'tool_result')) {
+      return true; // silently succeed
+    }
     return this.sendInput(JSON.stringify(msg));
   }
 
   sendInterrupt(): boolean {
+    // For codex backend, kill the current turn process
+    if (this.backend === 'codex') {
+      if (!this.codexTurnProcess) return false;
+      try {
+        this.codexTurnProcess.kill('SIGINT');
+        return true;
+      } catch {
+        return false;
+      }
+    }
     if (!this.process || this.status === 'dead') return false;
     try {
       this.process.kill('SIGINT');
@@ -224,7 +257,445 @@ export class Session {
     }
   }
 
+  /**
+   * Spawn a new `codex exec --json` process for this turn (codex backend).
+   * For the first message, starts a new thread. For subsequent messages, resumes the thread.
+   */
+  private sendCodexMessage(content: string): void {
+    // If a turn is already running, queue it or ignore
+    if (this.codexTurnProcess) {
+      logger.warn(`Session ${this.id} codex turn already in progress, interrupting previous`);
+      try { this.codexTurnProcess.kill('SIGINT'); } catch { /* ignore */ }
+    }
+
+    const isResume = !!this.codexThreadId;
+    const args: string[] = [];
+
+    if (isResume) {
+      args.push('exec', 'resume', this.codexThreadId!);
+    } else {
+      args.push('exec');
+    }
+
+    args.push('--json');
+
+    if (this.codexConfig.model) {
+      args.push('-m', this.codexConfig.model);
+    }
+
+    args.push(
+      '-C', this.workingDirectory,
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--skip-git-repo-check',
+    );
+
+    // The prompt is always the last argument
+    args.push(content);
+
+    const env: Record<string, string> = { ...process.env } as Record<string, string>;
+    if (this.codexConfig.apiKey) {
+      env.OPENAI_API_KEY = this.codexConfig.apiKey;
+    }
+    if (this.codexConfig.baseUrl) {
+      env.OPENAI_BASE_URL = this.codexConfig.baseUrl;
+    }
+    // Force openai model provider
+    if (this.codexConfig.baseUrl) {
+      // Add config override for model_provider if we're using a custom base URL
+      args.splice(args.indexOf('--json') + 1, 0, '-c', 'model_provider="openai"');
+    }
+
+    logger.info(`Session ${this.id} codex ${isResume ? 'resume' : 'exec'}: ${this.codexConfig.cmd} ${args.join(' ')}`);
+
+    // Push user message event so SSE clients see it
+    this.pushEvent('message', {
+      type: 'user',
+      message: { role: 'user', content },
+    });
+
+    const proc = spawn(this.codexConfig.cmd, args, {
+      cwd: this.workingDirectory,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+      env,
+    });
+
+    this.codexTurnProcess = proc;
+    this.pid = proc.pid;
+    this.attachCodexTurn(proc);
+  }
+
+  /**
+   * Wire up stdout/stderr/exit handlers for a codex exec turn process.
+   * Translates Codex JSONL ThreadEvents into the existing SSE message format.
+   */
+  private attachCodexTurn(proc: ChildProcess): void {
+    this.status = 'busy';
+    this.pushEvent('status', { status: 'busy' });
+
+    // Close stdin immediately — codex exec reads prompt from args, not stdin
+    proc.stdin?.end();
+
+    if (proc.stdout) {
+      this.codexTurnRl = createInterface({ input: proc.stdout });
+      this.codexTurnRl.on('line', (line) => {
+        this.lastActiveAt = Date.now() / 1000;
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        try {
+          const evt = JSON.parse(trimmed);
+          this.handleCodexEvent(evt);
+        } catch {
+          this.pushEvent('message', { type: 'raw', text: trimmed });
+        }
+      });
+    }
+
+    if (proc.stderr) {
+      proc.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString('utf-8').trim();
+        if (text) {
+          logger.debug(`Session ${this.id} codex stderr: ${text}`);
+        }
+      });
+    }
+
+    proc.on('exit', (code, signal) => {
+      logger.info(`Session ${this.id} codex turn exited: code=${code} signal=${signal}`);
+      this.codexTurnRl?.close();
+      this.codexTurnRl = null;
+      this.codexTurnProcess = null;
+      // Don't set status to dead — codex processes exit after each turn
+      if (this.status === 'busy') {
+        this.status = 'ready';
+        this.pushEvent('status', { status: 'ready' });
+      }
+    });
+
+    proc.on('error', (err) => {
+      logger.error(`Session ${this.id} codex process error: ${err.message}`);
+      this.pushEvent('error', { message: err.message });
+      this.codexTurnProcess = null;
+      this.codexTurnRl?.close();
+      this.codexTurnRl = null;
+      if (this.status !== 'dead') {
+        this.status = 'ready';
+        this.pushEvent('status', { status: 'ready' });
+      }
+    });
+  }
+
+  /**
+   * Translate a single Codex ThreadEvent to the SSE event format.
+   */
+  private handleCodexEvent(evt: Record<string, unknown>): void {
+    const type = evt.type as string;
+
+    if (type === 'thread.started') {
+      const threadId = evt.thread_id as string;
+      if (threadId && !this.codexThreadId) {
+        this.codexThreadId = threadId;
+        this.cliSessionId = threadId;
+        logger.info(`Session ${this.id} got codex thread_id: ${threadId}`);
+        this.onCliSessionId?.(this.id, threadId);
+        this.resolveCliSessionId(threadId);
+      }
+      this.pushEvent('message', {
+        type: 'system',
+        subtype: 'init',
+        session_id: threadId,
+      });
+      return;
+    }
+
+    if (type === 'turn.started') {
+      if (this.status !== 'dead') {
+        this.status = 'busy';
+        this.pushEvent('status', { status: 'busy' });
+      }
+      return;
+    }
+
+    if (type === 'turn.completed') {
+      const usage = evt.usage as Record<string, number> | undefined;
+      this.pushEvent('message', {
+        type: 'result',
+        subtype: 'success',
+        cost_usd: 0,
+        total_cost_usd: this.totalCostUsd,
+        usage: usage || {},
+      });
+      if (this.status !== 'dead') {
+        this.status = 'ready';
+        this.pushEvent('status', { status: 'ready' });
+      }
+      return;
+    }
+
+    if (type === 'turn.failed') {
+      const error = evt.error as Record<string, unknown> | undefined;
+      const msg = (error?.message as string) || 'Turn failed';
+      this.pushEvent('message', {
+        type: 'result',
+        subtype: 'error',
+        is_error: true,
+        result: msg,
+      });
+      this.pushEvent('error', { message: msg });
+      if (this.status !== 'dead') {
+        this.status = 'ready';
+        this.pushEvent('status', { status: 'ready' });
+      }
+      return;
+    }
+
+    if (type === 'error') {
+      const msg = (evt.message as string) || 'Unknown error';
+      this.pushEvent('error', { message: msg });
+      return;
+    }
+
+    // Handle item events (item.started, item.updated, item.completed)
+    if (type === 'item.started' || type === 'item.updated' || type === 'item.completed') {
+      this.handleCodexItemEvent(evt);
+      return;
+    }
+  }
+
+  /**
+   * Translate Codex item events into assistant message content blocks.
+   */
+  private handleCodexItemEvent(evt: Record<string, unknown>): void {
+    const eventType = evt.type as string;
+    const item = evt.item as Record<string, unknown> | undefined;
+    if (!item) return;
+
+    const itemType = item.type as string;
+    const itemId = item.id as string || randomUUID();
+
+    if (itemType === 'agent_message') {
+      const text = (item.text as string) || '';
+      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.pushEvent('message', {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+        },
+        streaming: eventType !== 'item.completed',
+      });
+      return;
+    }
+
+    if (itemType === 'reasoning') {
+      const text = (item.text as string) || '';
+      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.pushEvent('message', {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `💭 ${text}` }],
+        },
+      });
+      return;
+    }
+
+    if (itemType === 'command_execution') {
+      const command = (item.command as string) || '';
+      const output = (item.aggregated_output as string) || '';
+      const exitCode = item.exit_code as number | null;
+      const status = item.status as string;
+
+      if (eventType === 'item.started') {
+        // Show tool_use for the command
+        this.lastAssistantMessageAt = Date.now() / 1000;
+        this.pushEvent('message', {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'tool_use',
+              id: `codex_cmd_${itemId}`,
+              name: 'Bash',
+              input: { command },
+            }],
+          },
+        });
+      } else if (eventType === 'item.completed') {
+        // Show tool_result
+        this.pushEvent('message', {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: `codex_cmd_${itemId}`,
+              content: output || `(exit code: ${exitCode ?? '?'})`,
+              is_error: status === 'failed',
+            }],
+          },
+        });
+      } else if (eventType === 'item.updated' && output) {
+        // Streaming output update — just show as text
+        this.pushEvent('message', {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: `\`\`\`\n${output}\n\`\`\`` }],
+          },
+          streaming: true,
+        });
+      }
+      return;
+    }
+
+    if (itemType === 'file_change') {
+      const changes = item.changes as Array<Record<string, unknown>> || [];
+      const status = item.status as string;
+      const changesSummary = changes.map((c) => `${c.kind}: ${c.path}`).join('\n');
+
+      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.pushEvent('message', {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: `codex_patch_${itemId}`,
+            name: 'Edit',
+            input: { changes: changesSummary, status },
+          }],
+        },
+      });
+      if (eventType === 'item.completed') {
+        this.pushEvent('message', {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: `codex_patch_${itemId}`,
+              content: status === 'completed' ? 'Applied successfully' : 'Failed to apply',
+              is_error: status !== 'completed',
+            }],
+          },
+        });
+      }
+      return;
+    }
+
+    if (itemType === 'mcp_tool_call') {
+      const server = (item.server as string) || '';
+      const tool = (item.tool as string) || '';
+      const args = item.arguments || {};
+      const result = item.result as Record<string, unknown> | undefined;
+      const error = item.error as Record<string, unknown> | undefined;
+      const status = item.status as string;
+
+      if (eventType === 'item.started') {
+        this.lastAssistantMessageAt = Date.now() / 1000;
+        this.pushEvent('message', {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'tool_use',
+              id: `codex_mcp_${itemId}`,
+              name: `${server}:${tool}`,
+              input: args,
+            }],
+          },
+        });
+      } else if (eventType === 'item.completed') {
+        let content = '';
+        if (error) {
+          content = (error.message as string) || 'MCP tool error';
+        } else if (result) {
+          const resultContent = result.content as unknown[];
+          if (Array.isArray(resultContent)) {
+            content = resultContent.map((c: unknown) => {
+              const block = c as Record<string, unknown>;
+              return block.type === 'text' ? (block.text as string) : JSON.stringify(block);
+            }).join('\n');
+          } else {
+            content = JSON.stringify(result);
+          }
+        }
+        this.pushEvent('message', {
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: `codex_mcp_${itemId}`,
+              content: content || '(no result)',
+              is_error: status === 'failed',
+            }],
+          },
+        });
+      }
+      return;
+    }
+
+    if (itemType === 'todo_list') {
+      const items = item.items as Array<Record<string, unknown>> || [];
+      const text = items.map((t) => `${t.completed ? '✅' : '⬜'} ${t.text}`).join('\n');
+      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.pushEvent('message', {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `📋 Plan:\n${text}` }],
+        },
+        streaming: eventType !== 'item.completed',
+      });
+      return;
+    }
+
+    if (itemType === 'web_search') {
+      const query = (item.query as string) || '';
+      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.pushEvent('message', {
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{
+            type: 'tool_use',
+            id: `codex_search_${itemId}`,
+            name: 'WebSearch',
+            input: { query },
+          }],
+        },
+      });
+      return;
+    }
+
+    if (itemType === 'error') {
+      const msg = (item.message as string) || 'Unknown error';
+      this.pushEvent('error', { message: msg });
+      return;
+    }
+
+    // Unknown item type — log and skip
+    logger.debug(`Session ${this.id} unhandled codex item type: ${itemType}`);
+  }
+
   async destroy(): Promise<void> {
+    // Kill codex turn process if running
+    if (this.codexTurnProcess) {
+      try { this.codexTurnProcess.kill('SIGTERM'); } catch { /* ignore */ }
+      this.codexTurnRl?.close();
+      this.codexTurnRl = null;
+      this.codexTurnProcess = null;
+    }
+    // For codex backend with no persistent process, just mark dead
+    if (this.backend === 'codex' && !this.process) {
+      this.status = 'dead';
+      this.pushEvent('status', { status: 'dead' });
+      this.jsonlStream?.end();
+      this.jsonlStream = null;
+      return;
+    }
     if (!this.process || this.status === 'dead') {
       this.status = 'dead';
       return;
@@ -277,6 +748,7 @@ export class Session {
       title: this.title,
       description: this.description,
       team_id: this.teamId,
+      backend: this.backend,
       last_user_message_at: this.lastUserMessageAt,
       last_assistant_message_at: this.lastAssistantMessageAt,
     };
@@ -294,6 +766,7 @@ export class Session {
       title: this.title,
       description: this.description,
       team_id: this.teamId,
+      backend: this.backend,
       last_user_message_at: this.lastUserMessageAt,
       last_assistant_message_at: this.lastAssistantMessageAt,
     };
@@ -875,7 +1348,7 @@ export class Session {
     }
   }
 
-  private pushEvent(event: string, data: unknown): void {
+  pushEvent(event: string, data: unknown): void {
     const buffered: BufferedEvent = {
       id: ++this.eventCounter,
       event,
@@ -941,12 +1414,14 @@ export class SessionManager {
     title?: string;
     description?: string;
     teamId?: string;
+    backend?: Backend;
   }): Promise<Session> {
     if (this.activeCount >= this.config.maxSessions) {
       throw new Error('Max sessions reached');
     }
 
     const cwd = opts.workingDirectory || process.cwd();
+    const backend: Backend = opts.backend || this.config.defaultBackend;
 
     const sessionId = 'sess_' + randomUUID().replace(/-/g, '').slice(0, 12);
     const jsonlPath = path.join(this.sessionsDir, `${sessionId}.jsonl`);
@@ -956,13 +1431,14 @@ export class SessionManager {
     session.title = opts.title;
     session.description = opts.description;
     session.teamId = opts.teamId;
+    session.backend = backend;
     session.sessionOpts = { model: opts.model, permissionMode: opts.permissionMode, additionalFlags: opts.additionalFlags };
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
       fs.appendFileSync(jsonlPath, JSON.stringify({
         id: 0, event: 'meta', timestamp: Date.now() / 1000,
-        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title, description: opts.description, team_id: opts.teamId },
+        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title, description: opts.description, team_id: opts.teamId, backend },
       }) + '\n');
     } catch (err) {
       logger.warn(`Failed to write meta to ${jsonlPath}: ${err}`);
@@ -973,6 +1449,36 @@ export class SessionManager {
       logger.info(`Session ${sessionId} mapped to CLI session_id: ${cliSessionId}`);
     };
 
+    if (backend === 'codex') {
+      // Codex backend: don't spawn process now; wait for first user message
+      session.codexConfig = {
+        apiKey: this.config.codexApiKey,
+        baseUrl: this.config.codexBaseUrl,
+        cmd: this.config.codexCmd,
+        model: opts.model,
+      };
+
+      // Set session to ready immediately — no persistent process
+      session.status = 'ready';
+      session.pushEvent('status', { status: 'ready' });
+
+      session.scheduler = this.scheduler;
+      session.sessionManager = this;
+      this.sessions.set(sessionId, session);
+
+      // Wire up title/description change callbacks
+      session.onTitleChanged = (sid, title) => {
+        this.updateSessionTitle(sid, title);
+      };
+      session.onDescriptionChanged = (sid, description) => {
+        this.updateSessionDescription(sid, description);
+      };
+
+      logger.info(`Created codex session ${sessionId} (cwd=${cwd}, model=${opts.model || 'default'})`);
+      return session;
+    }
+
+    // Claude backend (existing behavior)
     const args: string[] = [
       '--print',
       '--output-format', 'stream-json',
@@ -1158,9 +1664,8 @@ export class SessionManager {
     }
 
     const meta = Session.readSessionMeta(jsonlPath);
-    if (!meta || !meta.cliSessionId) {
-      throw new Error(`No CLI session_id found in history for session ${sessionId}`);
-    }
+    // For codex sessions, cliSessionId may not exist yet (no thread started)
+    // We'll check the backend below to handle this correctly
 
     // Read working_directory, additional_flags, and title from the meta line
     let workingDirectory = opts?.workingDirectory || process.cwd();
@@ -1168,6 +1673,7 @@ export class SessionManager {
     let storedTitle: string | undefined;
     let storedDescription: string | undefined;
     let storedTeamId: string | undefined;
+    let storedBackend: Backend = 'claude';
     try {
       const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
       if (firstLine) {
@@ -1188,6 +1694,9 @@ export class SessionManager {
           if (metaEvt.data?.team_id) {
             storedTeamId = metaEvt.data.team_id;
           }
+          if (metaEvt.data?.backend) {
+            storedBackend = metaEvt.data.backend as Backend;
+          }
         }
       }
     } catch {
@@ -1198,8 +1707,6 @@ export class SessionManager {
     if (existing) {
       this.sessions.delete(sessionId);
     }
-
-    logger.info(`Resuming session ${sessionId} with CLI session_id ${meta.cliSessionId}`);
 
     // Create a new session with the same ID, resuming the CLI conversation
     if (this.activeCount >= this.config.maxSessions) {
@@ -1212,11 +1719,45 @@ export class SessionManager {
     session.title = storedTitle;
     session.description = storedDescription;
     session.teamId = storedTeamId;
+    session.backend = storedBackend;
     session.loadBufferFromFile(jsonlPath);
 
     session.onCliSessionId = (_sid, cliSessionId) => {
       logger.info(`Resumed session ${sessionId} got CLI session_id: ${cliSessionId}`);
     };
+
+    if (storedBackend === 'codex') {
+      // Codex backend: restore state without spawning a process
+      session.codexThreadId = meta?.cliSessionId || undefined;
+      session.cliSessionId = meta?.cliSessionId || undefined;
+      session.codexConfig = {
+        apiKey: this.config.codexApiKey,
+        baseUrl: this.config.codexBaseUrl,
+        cmd: this.config.codexCmd,
+        model: opts?.model,
+      };
+      session.status = 'ready';
+      session.scheduler = this.scheduler;
+      session.sessionManager = this;
+      this.sessions.set(sessionId, session);
+
+      session.onTitleChanged = (sid, title) => {
+        this.updateSessionTitle(sid, title);
+      };
+      session.onDescriptionChanged = (sid, description) => {
+        this.updateSessionDescription(sid, description);
+      };
+
+      logger.info(`Resumed codex session ${sessionId} with thread_id ${meta?.cliSessionId || 'none'}`);
+      return session;
+    }
+
+    // Claude backend requires a cliSessionId for resume
+    if (!meta || !meta.cliSessionId) {
+      throw new Error(`No CLI session_id found in history for session ${sessionId}`);
+    }
+
+    logger.info(`Resuming session ${sessionId} with CLI session_id ${meta.cliSessionId}`);
 
     const args: string[] = [
       '--print',
@@ -1301,6 +1842,7 @@ export class SessionManager {
         let title: string | undefined;
         let description: string | undefined;
         let teamId: string | undefined;
+        let backend: string = 'claude';
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
           if (firstLine) {
@@ -1318,6 +1860,9 @@ export class SessionManager {
               if (metaEvt.data?.team_id) {
                 teamId = metaEvt.data.team_id;
               }
+              if (metaEvt.data?.backend) {
+                backend = metaEvt.data.backend;
+              }
             }
           }
         } catch {
@@ -1334,6 +1879,7 @@ export class SessionManager {
           title,
           description,
           team_id: teamId,
+          backend,
         });
       }
     } catch (err) {

@@ -56,6 +56,7 @@ export function createRoutes(manager: SessionManager): Router {
         permissionMode: body.permission_mode,
         systemPrompt: body.system_prompt,
         additionalFlags: additionalFlags.length > 0 ? additionalFlags : undefined,
+        backend: body.backend,
       });
       res.status(201).json(session.toJSON());
     } catch (err: unknown) {

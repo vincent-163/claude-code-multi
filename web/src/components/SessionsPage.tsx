@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import type { Settings, Session } from '../lib/types'
+import type { Settings, Session, Backend } from '../lib/types'
 import * as api from '../lib/api'
 
 function formatElapsed(epochSec: number): string {
@@ -141,7 +141,7 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
         <div className="id">{s.id}</div>
       </div>
       <div className="meta">
-        <div>{s.status}</div>
+        <div>{s.status}{s.backend === 'codex' ? ' · Codex' : s.backend === 'claude' ? ' · Claude' : ''}</div>
         {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
         <div style={{ fontSize: 11 }}>
           {s.last_user_message_at ? `👤 ${formatElapsed(s.last_user_message_at)}` : ''}
@@ -158,7 +158,7 @@ export default function SessionsPage({ settings, onOpenChat, onOpenSettings }: P
   return (
     <div className="sessions-page">
       <div className="header">
-        <h1>Claude Code</h1>
+        <h1>AI Code</h1>
         <div className="spacer" />
         <button onClick={refresh} disabled={loading}>Refresh</button>
         <button onClick={onOpenSettings}>Settings</button>
@@ -203,6 +203,7 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
 }) {
   const [workDir, setWorkDir] = useState(settings.defaultWorkingDirectory)
   const [model, setModel] = useState(settings.defaultModel)
+  const [backend, setBackend] = useState<Backend>(settings.defaultBackend)
   const [skipPerms, setSkipPerms] = useState(false)
   const [flags, setFlags] = useState('')
   const [creating, setCreating] = useState(false)
@@ -217,6 +218,7 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
         model: model || undefined,
         dangerously_skip_permissions: skipPerms,
         additional_flags: flags ? flags.split(/\s+/).filter(Boolean) : undefined,
+        backend,
       })
       onCreated(session)
     } catch (err) {
@@ -230,23 +232,44 @@ function CreateSessionDialog({ settings, onCreated, onClose }: {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>New Session</h2>
         <div className="field">
+          <label>Backend</label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className={backend === 'codex' ? 'primary' : ''}
+              onClick={() => { setBackend('codex'); if (!model || model === 'claude-opus-4-6' || model === 'claude-sonnet-4-6') setModel('gpt-5.3-codex'); }}
+              style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+            >
+              Codex
+            </button>
+            <button
+              className={backend === 'claude' ? 'primary' : ''}
+              onClick={() => { setBackend('claude'); if (!model || model === 'gpt-5.3-codex') setModel(''); }}
+              style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+            >
+              Claude
+            </button>
+          </div>
+        </div>
+        <div className="field">
           <label>Working Directory</label>
           <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="/path/to/project" />
         </div>
         <div className="field">
           <label>Model</label>
-          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Default" />
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder={backend === 'codex' ? 'gpt-5.3-codex' : 'claude-opus-4-6'} />
         </div>
         <div className="field">
           <label>Extra Flags</label>
           <input value={flags} onChange={(e) => setFlags(e.target.value)} placeholder="--flag1 --flag2" />
         </div>
-        <div className="field">
-          <div className="checkbox-row">
-            <input type="checkbox" checked={skipPerms} onChange={(e) => setSkipPerms(e.target.checked)} id="skip-perms" />
-            <label htmlFor="skip-perms" style={{ color: 'var(--text)' }}>Skip permissions</label>
+        {backend === 'claude' && (
+          <div className="field">
+            <div className="checkbox-row">
+              <input type="checkbox" checked={skipPerms} onChange={(e) => setSkipPerms(e.target.checked)} id="skip-perms" />
+              <label htmlFor="skip-perms" style={{ color: 'var(--text)' }}>Skip permissions</label>
+            </div>
           </div>
-        </div>
+        )}
         {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 8 }}>{error}</div>}
         <div className="actions">
           <button onClick={onClose}>Cancel</button>

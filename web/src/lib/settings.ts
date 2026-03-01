@@ -5,8 +5,9 @@ const STORAGE_KEY = 'cc-settings';
 const defaults: Settings = {
   apiUrl: window.location.origin,
   authToken: '',
-  defaultModel: '',
+  defaultModel: 'gpt-5.3-codex',
   defaultWorkingDirectory: '',
+  defaultBackend: 'codex',
 };
 
 export function loadSettings(): Settings {

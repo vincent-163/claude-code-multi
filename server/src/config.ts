@@ -1,3 +1,5 @@
+export type Backend = 'claude' | 'codex';
+
 export interface Config {
   host: string;
   port: number;
@@ -12,6 +14,14 @@ export interface Config {
   contextWindowSize: number;
   /** Auto-compact threshold as percentage (0-100). 0 disables auto-compact. Default 80. */
   autoCompactThreshold: number;
+  /** Default backend: 'claude' or 'codex'. Default 'claude'. */
+  defaultBackend: Backend;
+  /** Codex CLI command. Default 'codex'. */
+  codexCmd: string;
+  /** OPENAI_API_KEY for Codex sessions. */
+  codexApiKey: string;
+  /** OPENAI_BASE_URL for Codex sessions (e.g. http://127.0.0.1:4000/v1). */
+  codexBaseUrl: string;
 }
 
 export function loadConfig(): Config {
@@ -32,5 +42,9 @@ export function loadConfig(): Config {
     sessionsDir: process.env.CC_SESSIONS_DIR || 'sessions',
     contextWindowSize: parseInt(process.env.CC_CONTEXT_WINDOW_SIZE || '200000', 10),
     autoCompactThreshold: parseInt(process.env.CC_AUTO_COMPACT_THRESHOLD || '80', 10),
+    defaultBackend: (process.env.CC_BACKEND === 'codex' ? 'codex' : 'claude') as Backend,
+    codexCmd: process.env.CC_CODEX_CMD || 'codex',
+    codexApiKey: process.env.CC_CODEX_API_KEY || '',
+    codexBaseUrl: process.env.CC_CODEX_BASE_URL || '',
   };
 }
