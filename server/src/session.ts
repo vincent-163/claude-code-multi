@@ -262,10 +262,14 @@ export class Session {
    * For the first message, starts a new thread. For subsequent messages, resumes the thread.
    */
   private sendCodexMessage(content: string): void {
-    // If a turn is already running, queue it or ignore
+    // If a turn is already running, clean it up before starting a new one
     if (this.codexTurnProcess) {
       logger.warn(`Session ${this.id} codex turn already in progress, interrupting previous`);
+      // Detach the readline so its events don't fire into the new turn
+      this.codexTurnRl?.close();
+      this.codexTurnRl = null;
       try { this.codexTurnProcess.kill('SIGINT'); } catch { /* ignore */ }
+      this.codexTurnProcess = null;
     }
 
     const isResume = !!this.codexThreadId;
@@ -365,25 +369,32 @@ export class Session {
 
     proc.on('exit', (code, signal) => {
       logger.info(`Session ${this.id} codex turn exited: code=${code} signal=${signal}`);
-      this.codexTurnRl?.close();
-      this.codexTurnRl = null;
-      this.codexTurnProcess = null;
-      // Don't set status to dead — codex processes exit after each turn
-      if (this.status === 'busy') {
-        this.status = 'ready';
-        this.pushEvent('status', { status: 'ready' });
+      // Only update shared state if this is still the current turn process.
+      // If a new turn was started (e.g. second message sent), the old process's
+      // exit must not clobber the new turn's process reference or status.
+      if (this.codexTurnProcess === proc) {
+        this.codexTurnRl?.close();
+        this.codexTurnRl = null;
+        this.codexTurnProcess = null;
+        // Don't set status to dead — codex processes exit after each turn
+        if (this.status === 'busy') {
+          this.status = 'ready';
+          this.pushEvent('status', { status: 'ready' });
+        }
       }
     });
 
     proc.on('error', (err) => {
       logger.error(`Session ${this.id} codex process error: ${err.message}`);
-      this.pushEvent('error', { message: err.message });
-      this.codexTurnProcess = null;
-      this.codexTurnRl?.close();
-      this.codexTurnRl = null;
-      if (this.status !== 'dead') {
-        this.status = 'ready';
-        this.pushEvent('status', { status: 'ready' });
+      if (this.codexTurnProcess === proc) {
+        this.pushEvent('error', { message: err.message });
+        this.codexTurnProcess = null;
+        this.codexTurnRl?.close();
+        this.codexTurnRl = null;
+        if (this.status !== 'dead') {
+          this.status = 'ready';
+          this.pushEvent('status', { status: 'ready' });
+        }
       }
     });
   }
