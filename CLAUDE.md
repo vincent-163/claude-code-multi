@@ -21,6 +21,8 @@ server/src/          # Node.js/TypeScript Express server, thin relay between Cla
   session.ts         # Session class (spawns `claude` or `codex` CLI), SessionManager; Codex JSONL→SSE translation; MCP tools: set_session_title, schedule_task, list_schedules, delete_schedule, create_team_member, list_team_members, send_team_message
   scheduler.ts       # Scheduler: SQLite-backed task scheduling with polling; creates sessions at scheduled times
   logger.ts          # Simple custom logger (timestamp + level prefix)
+server/tools/
+  codex-title-mcp.js # Minimal stdio MCP server for Codex `set_session_title` tool (title/description metadata updates)
 
 android/app/src/main/java/com/claudecode/app/
   ClaudeCodeApp.kt           # Application class, holds singletons (SshManager, ApiClient, SettingsRepository)
@@ -83,6 +85,7 @@ web/src/                     # React/TypeScript web SPA
 - **Session creation**: POST /sessions with optional `backend` field ('claude' or 'codex'). Claude: spawns persistent CLI process. Codex: creates session in ready state, waits for first user message to spawn `codex exec --json`.
 - **Chat (Claude)**: SSE stream relays CLI stdout as-is. User input → stdin.
 - **Chat (Codex)**: Each user message spawns `codex exec --json` (or `codex exec resume <thread_id>` for follow-ups). Server translates JSONL ThreadEvents (thread.started, item.started/completed, turn.completed) to the same SSE format as Claude. Process exits after each turn; session stays alive.
+- **Codex session titles**: Codex turns register a local MCP server (`server/tools/codex-title-mcp.js`) exposing `set_session_title`; Codex is instructed to call it at session start. When called, `session.ts` persists title/description and emits `title_changed` SSE.
 - **Permission approval**: Server launches CLI with `--permission-prompt-tool stdio` and sends an initialize control_request at session start. When CLI needs permission, it emits a `control_request` event (type=message, subtype=can_use_tool) with request_id, tool_name, input, blocked_path. Client renders approve/deny UI. Responses sent via POST /sessions/:id/input with type=control_response. Server forwards control messages as-is without parsing.
 - **AskUserQuestion**: When Claude calls the `AskUserQuestion` tool, it appears as a `tool_use` block (name=AskUserQuestion) in an assistant message. The parser extracts these into separate `ask_user_question` (web) / `ChatMessage.AskUserQuestion` (Android) messages rendered as interactive option-selection UI. User answers are sent back as `type=tool_result` with the matching `tool_use_id` and content `{"answers":{"0":"selected_label",...}}`. Both web and Android support single-select, multi-select, and "Other" free-text options.
 - **ExitPlanMode**: When Claude calls `ExitPlanMode`, it appears as a `tool_use` block (name=ExitPlanMode) in an assistant message. The parser extracts these into separate `plan_mode_exit` (web) / `ChatMessage.PlanModeExit` (Android) messages rendered with an "Approve" button. Approval sends back a `type=tool_result` with the matching `tool_use_id` and empty JSON content `{}`.

@@ -20,6 +20,8 @@ export type SSESubscriber = (event: BufferedEvent) => void;
 
 const MCP_SERVER_NAME = 'cc-app';
 const MCP_TOOL_SET_TITLE = 'set_session_title';
+const CODEX_TITLE_MCP_SERVER_NAME = 'cc_app_title';
+const CODEX_TITLE_INSTRUCTION = 'IMPORTANT: Before responding, immediately call the set_session_title MCP tool with a short descriptive title (3-8 words) for this session. Call it again whenever the conversation topic changes significantly.';
 const MCP_TOOL_SCHEDULE_TASK = 'schedule_task';
 const MCP_TOOL_LIST_SCHEDULES = 'list_schedules';
 const MCP_TOOL_DELETE_SCHEDULE = 'delete_schedule';
@@ -296,8 +298,16 @@ export class Session {
       '--skip-git-repo-check',
     );
 
+    const codexTitleMcpScriptPath = path.resolve(__dirname, '..', 'tools', 'codex-title-mcp.js');
+    args.push(
+      '-c', `mcp_servers.${CODEX_TITLE_MCP_SERVER_NAME}.command="node"`,
+      '-c', `mcp_servers.${CODEX_TITLE_MCP_SERVER_NAME}.args=${JSON.stringify([codexTitleMcpScriptPath])}`,
+    );
+
+    const codexPrompt = isResume ? content : `${CODEX_TITLE_INSTRUCTION}\n\n${content}`;
+
     // The prompt is always the last argument
-    args.push(content);
+    args.push(codexPrompt);
 
     const env: Record<string, string> = { ...process.env } as Record<string, string>;
     if (this.codexConfig.apiKey) {
@@ -606,6 +616,10 @@ export class Session {
       const error = item.error as Record<string, unknown> | undefined;
       const status = item.status as string;
 
+      if (eventType === 'item.started' || eventType === 'item.completed') {
+        this.applyCodexTitleToolCall(server, tool, args);
+      }
+
       if (eventType === 'item.started') {
         this.lastAssistantMessageAt = Date.now() / 1000;
         this.pushEvent('message', {
@@ -692,6 +706,44 @@ export class Session {
 
     // Unknown item type — log and skip
     logger.debug(`Session ${this.id} unhandled codex item type: ${itemType}`);
+  }
+
+  private applyCodexTitleToolCall(server: string, tool: string, args: unknown): void {
+    if (server !== CODEX_TITLE_MCP_SERVER_NAME || tool !== MCP_TOOL_SET_TITLE) {
+      return;
+    }
+    if (!args || typeof args !== 'object') {
+      return;
+    }
+    const toolArgs = args as Record<string, unknown>;
+    if (typeof toolArgs.title !== 'string') {
+      return;
+    }
+
+    const nextTitle = toolArgs.title.trim();
+    if (!nextTitle) {
+      return;
+    }
+    const nextDescription = typeof toolArgs.description === 'string'
+      ? toolArgs.description.trim()
+      : undefined;
+
+    let changed = false;
+    if (this.title !== nextTitle) {
+      this.title = nextTitle;
+      this.onTitleChanged?.(this.id, nextTitle);
+      changed = true;
+    }
+    if (nextDescription !== undefined && this.description !== nextDescription) {
+      this.description = nextDescription;
+      this.onDescriptionChanged?.(this.id, nextDescription);
+      changed = true;
+    }
+
+    if (changed) {
+      this.pushEvent('title_changed', { title: this.title, description: this.description });
+      logger.info(`Session ${this.id} title set via codex MCP: ${this.title}`);
+    }
   }
 
   async destroy(): Promise<void> {
