@@ -26,6 +26,7 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
   const [showCreate, setShowCreate] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
+  const [expandedPersistentPrompts, setExpandedPersistentPrompts] = useState<Set<string>>(new Set())
   const editRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(async () => {
@@ -94,6 +95,15 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
   }
 
   const statusColor = (s: string) => `status-${s}`
+  const togglePersistentPrompt = (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation()
+    setExpandedPersistentPrompts((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }
 
   const { teams, standalone } = useMemo(() => {
     const teamMap = new Map<string, Session[]>()
@@ -140,6 +150,22 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
         )}
         <div className="dir">{s.working_directory || '~'}</div>
         <div className="id">{s.id}</div>
+        {s.persistent && s.persistent_prompt && (
+          <>
+            <button
+              type="button"
+              className="persistent-prompt-toggle"
+              onClick={(e) => togglePersistentPrompt(e, s.id)}
+            >
+              {expandedPersistentPrompts.has(s.id) ? 'Hide prompt' : 'View prompt'}
+            </button>
+            {expandedPersistentPrompts.has(s.id) && (
+              <div className="persistent-prompt-preview">
+                <pre>{s.persistent_prompt}</pre>
+              </div>
+            )}
+          </>
+        )}
       </div>
       <div className="meta">
         <div>

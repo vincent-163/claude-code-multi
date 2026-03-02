@@ -1034,6 +1034,7 @@ export class Session {
       backend: this.backend,
       last_user_message_at: this.lastUserMessageAt,
       last_assistant_message_at: this.lastAssistantMessageAt,
+      persistent_prompt: this.persistentPrompt,
       persistent_cooldown_sec: this.persistentCooldownSec,
       persistent_next_run_at: this.persistentNextRunAt,
       persistent: !!this.persistentPrompt,
@@ -2232,6 +2233,7 @@ export class SessionManager {
           description,
           team_id: teamId,
           backend,
+          persistent_prompt: persistentPrompt,
           persistent_cooldown_sec: persistentCooldownSec,
           persistent: !!persistentPrompt,
         });

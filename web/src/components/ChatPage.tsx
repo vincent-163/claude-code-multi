@@ -45,6 +45,7 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [persistentPrompt, setPersistentPrompt] = useState<string | undefined>(undefined)
   const [persistentCooldownSec, setPersistentCooldownSec] = useState<number>(900)
   const [persistentNextRunAt, setPersistentNextRunAt] = useState<number | undefined>(undefined)
+  const [showPersistentPrompt, setShowPersistentPrompt] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [editTitleValue, setEditTitleValue] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -99,6 +100,7 @@ export default function ChatPage({ settings, onBack }: Props) {
     setPersistentPrompt(undefined)
     setPersistentCooldownSec(900)
     setPersistentNextRunAt(undefined)
+    setShowPersistentPrompt(false)
 
     let sseCleanup: (() => void) | undefined
 
@@ -382,9 +384,23 @@ export default function ChatPage({ settings, onBack }: Props) {
           )}
           <div className="subtitle">{cost > 0 ? `$${cost.toFixed(4)}` : ''}</div>
           {isPersistent && (
-            <div className="subtitle">
-              persistent · cooldown {persistentCooldownSec}s
-              {persistentNextRunAt ? ` · next ${Math.max(0, Math.ceil(persistentNextRunAt - Date.now() / 1000))}s` : ''}
+            <div className="subtitle persistent-meta">
+              <span>
+                persistent · cooldown {persistentCooldownSec}s
+                {persistentNextRunAt ? ` · next ${Math.max(0, Math.ceil(persistentNextRunAt - Date.now() / 1000))}s` : ''}
+              </span>
+              <button
+                type="button"
+                className="prompt-toggle"
+                onClick={() => setShowPersistentPrompt((prev) => !prev)}
+              >
+                {showPersistentPrompt ? 'Hide prompt' : 'View prompt'}
+              </button>
+            </div>
+          )}
+          {isPersistent && showPersistentPrompt && (
+            <div className="persistent-prompt-box">
+              <pre>{persistentPrompt}</pre>
             </div>
           )}
         </div>
