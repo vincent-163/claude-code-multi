@@ -67,13 +67,26 @@ export async function deleteSession(settings: Settings, id: string): Promise<voi
   if (!res.ok) throw new Error(`Delete session failed: ${res.status}`);
 }
 
-export async function updateSessionTitle(settings: Settings, id: string, title: string): Promise<void> {
+export async function updateSession(
+  settings: Settings,
+  id: string,
+  patch: {
+    title?: string;
+    description?: string;
+    persistent_prompt?: string;
+    persistent_cooldown_sec?: number;
+  },
+): Promise<void> {
   const res = await fetch(`${baseUrl(settings)}/sessions/${id}`, {
     method: 'PATCH',
     headers: getHeaders(settings),
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(patch),
   });
   if (!res.ok) throw new Error(`Update session failed: ${res.status}`);
+}
+
+export async function updateSessionTitle(settings: Settings, id: string, title: string): Promise<void> {
+  await updateSession(settings, id, { title });
 }
 
 export async function sendInput(

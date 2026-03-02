@@ -119,12 +119,18 @@ input:focus, textarea:focus, select:focus {
 }
 .session-card .info .id { font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); }
 .session-card .info .dir { font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-card .info .persistent-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
 .session-card .info .persistent-prompt-toggle {
   border: none;
   background: none;
   color: var(--text-link);
   padding: 0;
-  margin-top: 4px;
   font-size: 11px;
   text-decoration: underline;
 }

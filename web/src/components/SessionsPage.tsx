@@ -27,6 +27,7 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [expandedPersistentPrompts, setExpandedPersistentPrompts] = useState<Set<string>>(new Set())
+  const [persistentConfigSession, setPersistentConfigSession] = useState<Session | null>(null)
   const editRef = useRef<HTMLInputElement>(null)
 
   const refresh = useCallback(async () => {
@@ -104,6 +105,20 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
       return next
     })
   }
+  const openPersistentConfig = (e: React.MouseEvent, session: Session) => {
+    e.stopPropagation()
+    setPersistentConfigSession(session)
+  }
+  const handlePersistentConfigUpdated = (updated: Session) => {
+    setSessions((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)))
+    if (!updated.persistent) {
+      setExpandedPersistentPrompts((prev) => {
+        const next = new Set(prev)
+        next.delete(updated.id)
+        return next
+      })
+    }
+  }
 
   const { teams, standalone } = useMemo(() => {
     const teamMap = new Map<string, Session[]>()
@@ -150,8 +165,8 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
         )}
         <div className="dir">{s.working_directory || '~'}</div>
         <div className="id">{s.id}</div>
-        {s.persistent && s.persistent_prompt && (
-          <>
+        <div className="persistent-actions">
+          {s.persistent_prompt && (
             <button
               type="button"
               className="persistent-prompt-toggle"
@@ -159,12 +174,19 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
             >
               {expandedPersistentPrompts.has(s.id) ? 'Hide prompt' : 'View prompt'}
             </button>
-            {expandedPersistentPrompts.has(s.id) && (
-              <div className="persistent-prompt-preview">
-                <pre>{s.persistent_prompt}</pre>
-              </div>
-            )}
-          </>
+          )}
+          <button
+            type="button"
+            className="persistent-prompt-toggle"
+            onClick={(e) => openPersistentConfig(e, s)}
+          >
+            {s.persistent ? 'Configure persistent' : 'Set persistent prompt'}
+          </button>
+        </div>
+        {s.persistent_prompt && expandedPersistentPrompts.has(s.id) && (
+          <div className="persistent-prompt-preview">
+            <pre>{s.persistent_prompt}</pre>
+          </div>
         )}
       </div>
       <div className="meta">
@@ -227,6 +249,15 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
           onUpdateSettings={onUpdateSettings}
           onCreated={(s) => { setShowCreate(false); onOpenChat(s.id) }}
           onClose={() => setShowCreate(false)}
+        />
+      )}
+      {persistentConfigSession && (
+        <PersistentConfigDialog
+          key={persistentConfigSession.id}
+          settings={settings}
+          session={persistentConfigSession}
+          onUpdated={handlePersistentConfigUpdated}
+          onClose={() => setPersistentConfigSession(null)}
         />
       )}
     </div>
@@ -349,6 +380,85 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
           <button onClick={onClose}>Cancel</button>
           <button className="primary" onClick={handleCreate} disabled={creating}>
             {creating ? 'Creating...' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PersistentConfigDialog({ settings, session, onUpdated, onClose }: {
+  settings: Settings
+  session: Session
+  onUpdated: (session: Session) => void
+  onClose: () => void
+}) {
+  const [persistentPrompt, setPersistentPrompt] = useState(session.persistent_prompt || '')
+  const [cooldownSec, setCooldownSec] = useState(String(session.persistent_cooldown_sec ?? 900))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError('')
+    const trimmedPrompt = persistentPrompt.trim()
+    const nextCooldown = Math.max(1, parseInt(cooldownSec || '900', 10) || 900)
+    try {
+      await api.updateSession(settings, session.id, {
+        persistent_prompt: trimmedPrompt,
+        persistent_cooldown_sec: nextCooldown,
+      })
+      onUpdated({
+        ...session,
+        persistent: !!trimmedPrompt,
+        persistent_prompt: trimmedPrompt || undefined,
+        persistent_cooldown_sec: nextCooldown,
+        persistent_next_run_at: trimmedPrompt ? session.persistent_next_run_at : undefined,
+      })
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Update failed')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={saving ? undefined : onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Persistent Prompt</h2>
+        <div className="field">
+          <label>Session</label>
+          <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            {session.title || session.id}
+          </div>
+        </div>
+        <div className="field">
+          <label>Prompt</label>
+          <textarea
+            value={persistentPrompt}
+            onChange={(e) => setPersistentPrompt(e.target.value)}
+            placeholder="Leave empty to disable persistent mode."
+            rows={6}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+        </div>
+        <div className="field">
+          <label>Cooldown Seconds</label>
+          <input
+            value={cooldownSec}
+            onChange={(e) => setCooldownSec(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="900"
+            disabled={!persistentPrompt.trim()}
+          />
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          When prompt is set, the session runs it automatically and restarts after assistant inactivity for the cooldown duration.
+        </div>
+        {error && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 8 }}>{error}</div>}
+        <div className="actions">
+          <button onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="primary" onClick={handleSave} disabled={saving}>
+            {saving ? 'Saving...' : 'Save'}
           </button>
         </div>
       </div>

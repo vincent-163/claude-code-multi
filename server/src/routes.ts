@@ -215,25 +215,55 @@ export function createRoutes(manager: SessionManager): Router {
     req.on('error', cleanup);
   });
 
-  // --- Update Session (title, description) ---
+  // --- Update Session (title, description, persistent config) ---
   router.patch('/sessions/:id', (req: Request, res: Response) => {
-    const { title, description } = req.body || {};
-    if (typeof title !== 'string' && typeof description !== 'string') {
-      res.status(400).json({ error: 'title or description must be a string' });
+    const { title, description, persistent_prompt, persistent_cooldown_sec } = req.body || {};
+    const hasTitle = typeof title === 'string';
+    const hasDescription = typeof description === 'string';
+    const hasPersistentPrompt = typeof persistent_prompt === 'string';
+    const hasPersistentCooldown = typeof persistent_cooldown_sec === 'number';
+
+    if (hasPersistentCooldown && (!Number.isFinite(persistent_cooldown_sec) || persistent_cooldown_sec < 1)) {
+      res.status(400).json({ error: 'persistent_cooldown_sec must be a number >= 1' });
       return;
     }
+
+    if (!hasTitle && !hasDescription && !hasPersistentPrompt && !hasPersistentCooldown) {
+      res.status(400).json({ error: 'title/description/persistent_prompt must be a string or persistent_cooldown_sec must be a number >= 1' });
+      return;
+    }
+
     let found = false;
-    if (typeof title === 'string') {
+    if (hasTitle) {
       found = manager.updateSessionTitle(req.params.id, title) || found;
     }
-    if (typeof description === 'string') {
+    if (hasDescription) {
       found = manager.updateSessionDescription(req.params.id, description) || found;
+    }
+    if (hasPersistentPrompt || hasPersistentCooldown) {
+      const persistentConfigUpdate: {
+        persistentPrompt?: string;
+        persistentCooldownSec?: number;
+      } = {};
+      if (hasPersistentPrompt) {
+        persistentConfigUpdate.persistentPrompt = persistent_prompt;
+      }
+      if (hasPersistentCooldown) {
+        persistentConfigUpdate.persistentCooldownSec = Math.max(1, Math.floor(persistent_cooldown_sec));
+      }
+      found = manager.updateSessionPersistentConfig(req.params.id, persistentConfigUpdate) || found;
     }
     if (!found) {
       res.status(404).json({ error: 'Session not found' });
       return;
     }
-    res.json({ id: req.params.id, title, description });
+    res.json({
+      id: req.params.id,
+      title: hasTitle ? title : undefined,
+      description: hasDescription ? description : undefined,
+      persistent_prompt: hasPersistentPrompt ? persistent_prompt.trim() || undefined : undefined,
+      persistent_cooldown_sec: hasPersistentCooldown ? Math.max(1, Math.floor(persistent_cooldown_sec)) : undefined,
+    });
   });
 
   // --- Resize ---

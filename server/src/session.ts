@@ -303,6 +303,39 @@ export class Session {
     return ok;
   }
 
+  configurePersistent(prompt: string | undefined, cooldownSec: number): void {
+    const normalizedPrompt = prompt?.trim() || undefined;
+    const normalizedCooldown = Math.max(1, Math.floor(cooldownSec));
+    const promptChanged = normalizedPrompt !== this.persistentPrompt;
+    const cooldownChanged = normalizedCooldown !== this.persistentCooldownSec;
+
+    this.persistentPrompt = normalizedPrompt;
+    this.persistentCooldownSec = normalizedCooldown;
+
+    if (!this.persistentPrompt) {
+      this.persistentHasStarted = false;
+      this.persistentRestartInProgress = false;
+      this.clearPersistentTimer();
+      return;
+    }
+
+    if (promptChanged) {
+      this.persistentHasStarted = false;
+      this.clearPersistentTimer();
+      this.schedulePersistentInitialPrompt();
+      return;
+    }
+
+    if (!this.persistentHasStarted) {
+      this.schedulePersistentInitialPrompt();
+      return;
+    }
+
+    if (cooldownChanged && this.lastAssistantMessageAt) {
+      this.schedulePersistentRestartFromAssistant();
+    }
+  }
+
   private clearPersistentTimer(): void {
     if (this.persistentTimer) {
       clearTimeout(this.persistentTimer);
@@ -1898,14 +1931,7 @@ export class SessionManager {
     session.sendPersistentPrompt();
   }
 
-  updateSessionTitle(id: string, title: string): boolean {
-    // Update in-memory session if present
-    const session = this.sessions.get(id);
-    if (session) {
-      session.title = title;
-    }
-
-    // Update the meta line in the JSONL file
+  private updateSessionMeta(id: string, update: (data: Record<string, unknown>) => void, fieldLabel: string): boolean {
     const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
     if (!fs.existsSync(jsonlPath)) return false;
 
@@ -1916,16 +1942,28 @@ export class SessionManager {
         const meta = JSON.parse(lines[0]);
         if (meta.event === 'meta') {
           meta.data = meta.data || {};
-          meta.data.title = title;
+          update(meta.data);
           lines[0] = JSON.stringify(meta);
           fs.writeFileSync(jsonlPath, lines.join('\n'));
           return true;
         }
       }
     } catch (err) {
-      logger.warn(`Failed to update title for session ${id}: ${err}`);
+      logger.warn(`Failed to update ${fieldLabel} for session ${id}: ${err}`);
     }
-    return !!session;
+    return false;
+  }
+
+  updateSessionTitle(id: string, title: string): boolean {
+    // Update in-memory session if present
+    const session = this.sessions.get(id);
+    if (session) {
+      session.title = title;
+    }
+    const persisted = this.updateSessionMeta(id, (data) => {
+      data.title = title;
+    }, 'title');
+    return persisted || !!session;
   }
 
   updateSessionDescription(id: string, description: string): boolean {
@@ -1933,27 +1971,10 @@ export class SessionManager {
     if (session) {
       session.description = description;
     }
-
-    const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
-    if (!fs.existsSync(jsonlPath)) return false;
-
-    try {
-      const content = fs.readFileSync(jsonlPath, 'utf-8');
-      const lines = content.split('\n');
-      if (lines.length > 0 && lines[0]) {
-        const meta = JSON.parse(lines[0]);
-        if (meta.event === 'meta') {
-          meta.data = meta.data || {};
-          meta.data.description = description;
-          lines[0] = JSON.stringify(meta);
-          fs.writeFileSync(jsonlPath, lines.join('\n'));
-          return true;
-        }
-      }
-    } catch (err) {
-      logger.warn(`Failed to update description for session ${id}: ${err}`);
-    }
-    return !!session;
+    const persisted = this.updateSessionMeta(id, (data) => {
+      data.description = description;
+    }, 'description');
+    return persisted || !!session;
   }
 
   removeSession(id: string): void {
@@ -1969,27 +1990,44 @@ export class SessionManager {
     if (session) {
       session.teamId = teamId;
     }
+    const persisted = this.updateSessionMeta(id, (data) => {
+      data.team_id = teamId;
+    }, 'team_id');
+    return persisted || !!session;
+  }
 
-    const jsonlPath = path.join(this.sessionsDir, `${id}.jsonl`);
-    if (!fs.existsSync(jsonlPath)) return false;
-
-    try {
-      const content = fs.readFileSync(jsonlPath, 'utf-8');
-      const lines = content.split('\n');
-      if (lines.length > 0 && lines[0]) {
-        const meta = JSON.parse(lines[0]);
-        if (meta.event === 'meta') {
-          meta.data = meta.data || {};
-          meta.data.team_id = teamId;
-          lines[0] = JSON.stringify(meta);
-          fs.writeFileSync(jsonlPath, lines.join('\n'));
-          return true;
-        }
-      }
-    } catch (err) {
-      logger.warn(`Failed to update team_id for session ${id}: ${err}`);
+  updateSessionPersistentConfig(id: string, opts: {
+    persistentPrompt?: string;
+    persistentCooldownSec?: number;
+  }): boolean {
+    const hasPrompt = Object.prototype.hasOwnProperty.call(opts, 'persistentPrompt');
+    const hasCooldown = Object.prototype.hasOwnProperty.call(opts, 'persistentCooldownSec');
+    if (!hasPrompt && !hasCooldown) {
+      return false;
     }
-    return !!session;
+
+    const session = this.sessions.get(id);
+    const normalizedPrompt = hasPrompt ? opts.persistentPrompt?.trim() || undefined : undefined;
+    const normalizedCooldown = hasCooldown
+      ? Math.max(1, Math.floor(opts.persistentCooldownSec ?? this.config.persistentCooldownSec))
+      : undefined;
+
+    if (session) {
+      const nextPrompt = hasPrompt ? normalizedPrompt : session.persistentPrompt;
+      const nextCooldown = hasCooldown ? (normalizedCooldown ?? session.persistentCooldownSec) : session.persistentCooldownSec;
+      session.configurePersistent(nextPrompt, nextCooldown);
+    }
+
+    const persisted = this.updateSessionMeta(id, (data) => {
+      if (hasPrompt) {
+        data.persistent_prompt = normalizedPrompt;
+      }
+      if (hasCooldown) {
+        data.persistent_cooldown_sec = normalizedCooldown;
+      }
+    }, 'persistent config');
+
+    return persisted || !!session;
   }
 
   /**
