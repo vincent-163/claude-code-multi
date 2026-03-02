@@ -43,7 +43,7 @@ All configuration is via environment variables:
 | `CC_AUTH_TOKENS` | (none) | Comma-separated list of valid Bearer tokens. If empty, auth is disabled. |
 | `CC_BUFFER_SIZE` | `1000` | Max output messages to buffer per session (for reconnect history) |
 | `CC_SESSION_TIMEOUT` | `3600` | Seconds of inactivity before session auto-cleanup |
-| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default cooldown seconds between persistent prompt reruns |
+| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default assistant-inactivity timeout (seconds) before persistent session restart |
 | `CC_LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
 
 ## API Overview
@@ -71,7 +71,7 @@ Send via `POST /sessions/:id/input`:
 - `tool_result` — respond to a tool use confirmation
 - `interrupt` — send SIGINT to the process
 
-When a session is created with `persistent_prompt`, `user_message` is disabled. The server automatically resubmits the configured prompt whenever the session returns to `ready` (first run immediately, then after cooldown).
+When a session is created with `persistent_prompt`, the prompt runs once when the session is ready, and `user_message` remains available. After the last assistant message is older than the configured timeout, the server clears and restarts the session from the persistent prompt.
 
 ### SSE Stream Events
 

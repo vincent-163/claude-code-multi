@@ -179,6 +179,15 @@ export default function ChatPage({ settings, onBack }: Props) {
               if (typeof d.title === 'string') setTitle(d.title)
               return
             }
+            if (evt.event === 'session_reset') {
+              setMessages([])
+              setCost(0)
+              setResolvedRequests(new Map())
+              setPendingResponses(new Set())
+              setAnsweredQuestions(new Set())
+              setResolvedPlanExits(new Set())
+              return
+            }
 
             const msgs = parseEvents(evt)
             for (const msg of msgs) {
@@ -242,7 +251,6 @@ export default function ChatPage({ settings, onBack }: Props) {
   const sendMessage = async () => {
     const text = input.trim()
     if (!text || !sessionId) return
-    if (persistentPrompt) return
     setInput('')
     setMessages((prev) => [...prev, { kind: 'user', content: text }])
     try {
@@ -400,12 +408,12 @@ export default function ChatPage({ settings, onBack }: Props) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={status === 'dead' ? 'Session ended' : isPersistent ? 'Persistent session (manual user messages disabled)' : 'Send a message...'}
-          disabled={status === 'dead' || isPersistent}
+          placeholder={status === 'dead' ? 'Session ended' : 'Send a message...'}
+          disabled={status === 'dead'}
           rows={1}
         />
         <div className="btn-group">
-          <button className="primary" onClick={sendMessage} disabled={!input.trim() || status === 'dead' || isPersistent}>
+          <button className="primary" onClick={sendMessage} disabled={!input.trim() || status === 'dead'}>
             Send
           </button>
         </div>

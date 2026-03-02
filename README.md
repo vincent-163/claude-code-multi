@@ -51,7 +51,7 @@ npm start
 | `CC_CLAUDE_CMD` | `claude` | Path to Claude CLI binary |
 | `CC_BUFFER_SIZE` | `1000` | SSE message buffer size |
 | `CC_SESSION_TIMEOUT` | `3600` | Session timeout in seconds |
-| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default cooldown for persistent prompt sessions |
+| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default assistant-inactivity timeout for persistent prompt sessions |
 | `CC_LOG_LEVEL` | `info` | Log level |
 | `CC_SESSIONS_DIR` | `sessions` | Session persistence directory |
 
@@ -62,7 +62,7 @@ npm start
 - `GET /sessions` — list sessions
 - `GET /sessions/:id` — get session
 - `DELETE /sessions/:id` — delete session
-- `POST /sessions/:id/input` — send user message, tool result, or control response (persistent sessions reject `user_message`)
+- `POST /sessions/:id/input` — send user message, tool result, or control response
 - `GET /sessions/:id/stream` — SSE event stream
 - `POST /sessions/:id/resize` — resize terminal
 

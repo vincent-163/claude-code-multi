@@ -124,10 +124,6 @@ export function createRoutes(manager: SessionManager): Router {
     }
 
     if (msgType === 'user_message') {
-      if (session.persistentPrompt) {
-        res.status(400).json({ error: 'user_message is disabled for persistent sessions' });
-        return;
-      }
       const content = body.content;
       if (typeof content !== 'string' || !content) {
         res.status(400).json({ error: 'content is required for user_message' });

@@ -22,6 +22,7 @@ const MCP_SERVER_NAME = 'cc-app';
 const MCP_TOOL_SET_TITLE = 'set_session_title';
 const CODEX_TITLE_MCP_SERVER_NAME = 'cc_app_title';
 const CODEX_TITLE_INSTRUCTION = 'IMPORTANT: Before responding, immediately call the set_session_title MCP tool with a short descriptive title (3-8 words) for this session. Call it again whenever the conversation topic changes significantly.';
+const CLAUDE_TITLE_INSTRUCTION = 'IMPORTANT: After receiving the first user message, immediately call the set_session_title MCP tool to give this session a short descriptive title (3-8 words).';
 const MCP_TOOL_SCHEDULE_TASK = 'schedule_task';
 const MCP_TOOL_LIST_SCHEDULES = 'list_schedules';
 const MCP_TOOL_DELETE_SCHEDULE = 'delete_schedule';
@@ -67,15 +68,22 @@ export class Session {
   private autoCompactPending: boolean = false;
 
   /** Session creation options, used to propagate to scheduled tasks */
-  sessionOpts: { model?: string; permissionMode?: string; additionalFlags?: string[] } = {};
+  sessionOpts: {
+    model?: string;
+    permissionMode?: string;
+    additionalFlags?: string[];
+    systemPrompt?: string;
+    resumeConversationId?: string;
+  } = {};
 
   /** Persistent session prompt. If set, the session auto-restarts with this prompt when ready. */
   persistentPrompt: string | undefined;
   /** Cooldown in seconds between persistent prompt runs after the first run. */
   persistentCooldownSec: number = 900;
-  /** Next scheduled persistent run time (epoch seconds). */
+  /** Next scheduled persistent run/restart time (epoch seconds). */
   persistentNextRunAt: number | undefined;
   private persistentHasStarted: boolean = false;
+  private persistentRestartInProgress: boolean = false;
   private persistentTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Called when the title is changed via MCP tool */
@@ -101,6 +109,7 @@ export class Session {
   private subscribers = new Set<SSESubscriber>();
   private stdoutRl: Interface | null = null;
   private jsonlStream: fs.WriteStream | null = null;
+  private jsonlPath: string | undefined;
 
   /** Called when CLI session_id is captured from the init message */
   onCliSessionId: ((sessionId: string, cliSessionId: string) => void) | null = null;
@@ -120,6 +129,7 @@ export class Session {
       this.resolveCliSessionId = resolve;
     });
     if (jsonlPath) {
+      this.jsonlPath = jsonlPath;
       this.jsonlStream = fs.createWriteStream(jsonlPath, { flags: 'a' });
     }
   }
@@ -277,18 +287,20 @@ export class Session {
     this.lastActiveAt = Date.now() / 1000;
     this.lastUserMessageAt = this.lastActiveAt;
     const content = this.persistentPrompt;
+    let ok = false;
     if (this.backend === 'codex') {
       this.sendCodexMessage(content);
-      return true;
+      ok = true;
+    } else {
+      ok = this.sendInput(JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content },
+      }));
     }
-    return this.sendInput(JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content },
-    }));
-  }
-
-  markPersistentStarted(): void {
-    this.persistentHasStarted = true;
+    if (ok) {
+      this.persistentHasStarted = true;
+    }
+    return ok;
   }
 
   private clearPersistentTimer(): void {
@@ -299,37 +311,146 @@ export class Session {
     this.persistentNextRunAt = undefined;
   }
 
-  private schedulePersistentPrompt(delaySec: number): void {
-    if (!this.persistentPrompt || this.status === 'dead') return;
+  private schedulePersistentInitialPrompt(): void {
+    if (!this.persistentPrompt || this.status !== 'ready') return;
+    if (this.persistentHasStarted || this.persistentRestartInProgress) return;
     this.clearPersistentTimer();
-    const safeDelay = Math.max(0, delaySec);
-    this.persistentNextRunAt = Date.now() / 1000 + safeDelay;
+    this.persistentNextRunAt = Date.now() / 1000;
     this.persistentTimer = setTimeout(() => {
       this.persistentTimer = null;
       this.persistentNextRunAt = undefined;
-      if (!this.persistentPrompt || this.status !== 'ready') {
+      if (!this.persistentPrompt || this.status !== 'ready') return;
+      this.sendPersistentPrompt();
+    }, 0);
+  }
+
+  private schedulePersistentRestartFromAssistant(): void {
+    if (!this.persistentPrompt || !this.lastAssistantMessageAt) return;
+    this.clearPersistentTimer();
+    const safeDelay = Math.max(1, this.persistentCooldownSec);
+    this.persistentNextRunAt = this.lastAssistantMessageAt + safeDelay;
+    this.persistentTimer = setTimeout(() => {
+      this.persistentTimer = null;
+      this.persistentNextRunAt = undefined;
+      if (!this.persistentPrompt || this.status === 'dead' || this.persistentRestartInProgress) {
         return;
       }
-      const ok = this.sendPersistentPrompt();
-      if (ok) {
-        this.persistentHasStarted = true;
-      } else {
-        // Retry shortly on transient failures (e.g. process transitioning).
-        this.schedulePersistentPrompt(5);
+      if (!this.sessionManager) {
+        logger.warn(`Session ${this.id} missing manager for persistent restart`);
+        return;
       }
+      this.persistentRestartInProgress = true;
+      void this.sessionManager.restartPersistentSession(this.id)
+        .catch((err) => {
+          logger.error(`Session ${this.id} persistent restart failed: ${err}`);
+        })
+        .finally(() => {
+          this.persistentRestartInProgress = false;
+        });
     }, safeDelay * 1000);
+  }
+
+  onAssistantActivity(): void {
+    this.lastAssistantMessageAt = Date.now() / 1000;
+    this.schedulePersistentRestartFromAssistant();
   }
 
   private handlePersistentOnStatus(status: SessionStatus): void {
     if (!this.persistentPrompt) return;
     if (status === 'ready') {
-      const delay = this.persistentHasStarted ? this.persistentCooldownSec : 0;
-      this.schedulePersistentPrompt(delay);
+      this.schedulePersistentInitialPrompt();
       return;
     }
-    if (status === 'dead' || status === 'busy' || status === 'waiting_for_input' || status === 'starting') {
+    if (status === 'dead') {
       this.clearPersistentTimer();
     }
+  }
+
+  private buildMetaLine(): string {
+    return JSON.stringify({
+      id: 0,
+      event: 'meta',
+      timestamp: Date.now() / 1000,
+      data: {
+        working_directory: this.workingDirectory,
+        model: this.sessionOpts.model,
+        permission_mode: this.sessionOpts.permissionMode,
+        resume_conversation_id: this.sessionOpts.resumeConversationId,
+        additional_flags: this.sessionOpts.additionalFlags,
+        title: this.title,
+        description: this.description,
+        team_id: this.teamId,
+        backend: this.backend,
+        persistent_prompt: this.persistentPrompt,
+        persistent_cooldown_sec: this.persistentCooldownSec,
+        system_prompt: this.sessionOpts.systemPrompt,
+      },
+    });
+  }
+
+  private resetHistoryStorage(): void {
+    this.buffer = [];
+    this.eventCounter = 0;
+    this.totalCostUsd = 0;
+    this.lastUserMessageAt = undefined;
+    this.lastAssistantMessageAt = undefined;
+    this.contextUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+    this.contextUsedPct = 0;
+    this.autoCompactPending = false;
+    this.cliSessionId = undefined;
+    this.codexThreadId = undefined;
+    this.pid = undefined;
+    this.lastActiveAt = Date.now() / 1000;
+    if (!this.jsonlPath) return;
+    try {
+      this.jsonlStream?.end();
+      this.jsonlStream = null;
+      fs.writeFileSync(this.jsonlPath, this.buildMetaLine() + '\n');
+      this.jsonlStream = fs.createWriteStream(this.jsonlPath, { flags: 'a' });
+    } catch (err) {
+      logger.warn(`Failed to reset JSONL for session ${this.id}: ${err}`);
+    }
+  }
+
+  async stopForPersistentRestart(): Promise<void> {
+    this.clearPersistentTimer();
+    this.pushEvent('session_reset', {
+      reason: 'persistent_timeout',
+      timeout_sec: this.persistentCooldownSec,
+    });
+    if (this.codexTurnProcess) {
+      try { this.codexTurnProcess.kill('SIGTERM'); } catch { /* ignore */ }
+      this.codexTurnRl?.close();
+      this.codexTurnRl = null;
+      this.codexTurnProcess = null;
+    }
+    if (this.process) {
+      try {
+        this.process.kill('SIGTERM');
+      } catch {
+        // already dead
+      }
+      const exited = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 3000);
+        this.process?.once('exit', () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      });
+      if (!exited && this.process) {
+        try { this.process.kill('SIGKILL'); } catch { /* ignore */ }
+      }
+      this.stdoutRl?.close();
+      this.stdoutRl = null;
+      this.process = null;
+    }
+    this.status = 'starting';
+    this.resetHistoryStorage();
+  }
+
+  rearmPersistentAfterRestart(): void {
+    this.status = 'ready';
+    this.pushEvent('status', { status: 'ready' });
   }
 
   /**
@@ -572,7 +693,7 @@ export class Session {
 
     if (itemType === 'agent_message') {
       const text = (item.text as string) || '';
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       this.pushEvent('message', {
         type: 'assistant',
         message: {
@@ -586,7 +707,7 @@ export class Session {
 
     if (itemType === 'reasoning') {
       const text = (item.text as string) || '';
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       this.pushEvent('message', {
         type: 'assistant',
         message: {
@@ -605,7 +726,7 @@ export class Session {
 
       if (eventType === 'item.started') {
         // Show tool_use for the command
-        this.lastAssistantMessageAt = Date.now() / 1000;
+        this.onAssistantActivity();
         this.pushEvent('message', {
           type: 'assistant',
           message: {
@@ -651,7 +772,7 @@ export class Session {
       const status = item.status as string;
       const changesSummary = changes.map((c) => `${c.kind}: ${c.path}`).join('\n');
 
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       this.pushEvent('message', {
         type: 'assistant',
         message: {
@@ -694,7 +815,7 @@ export class Session {
       }
 
       if (eventType === 'item.started') {
-        this.lastAssistantMessageAt = Date.now() / 1000;
+        this.onAssistantActivity();
         this.pushEvent('message', {
           type: 'assistant',
           message: {
@@ -741,7 +862,7 @@ export class Session {
     if (itemType === 'todo_list') {
       const items = item.items as Array<Record<string, unknown>> || [];
       const text = items.map((t) => `${t.completed ? '✅' : '⬜'} ${t.text}`).join('\n');
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       this.pushEvent('message', {
         type: 'assistant',
         message: {
@@ -755,7 +876,7 @@ export class Session {
 
     if (itemType === 'web_search') {
       const query = (item.query as string) || '';
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       this.pushEvent('message', {
         type: 'assistant',
         message: {
@@ -1343,7 +1464,7 @@ export class Session {
 
     if (type === 'assistant') {
       // CLI is generating a response
-      this.lastAssistantMessageAt = Date.now() / 1000;
+      this.onAssistantActivity();
       if (this.status !== 'dead') {
         this.status = 'busy';
         this.pushEvent('status', { status: 'busy' });
@@ -1555,6 +1676,64 @@ export class SessionManager {
     return count;
   }
 
+  private buildClaudeArgs(opts: {
+    model?: string;
+    permissionMode?: string;
+    additionalFlags?: string[];
+    resumeConversationId?: string;
+    systemPrompt?: string;
+  }): string[] {
+    const args: string[] = [
+      '--print',
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--verbose',
+      '--replay-user-messages',
+      '--permission-prompt-tool', 'stdio',
+      '--mcp-config', JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'sdk', name: MCP_SERVER_NAME } } }),
+    ];
+    if (opts.model) {
+      args.push('--model', opts.model);
+    }
+    if (opts.resumeConversationId) {
+      args.push('--resume', opts.resumeConversationId);
+    }
+    if (opts.permissionMode) {
+      args.push('--permission-mode', opts.permissionMode);
+    }
+    const systemPrompt = opts.systemPrompt
+      ? `${opts.systemPrompt}\n\n${CLAUDE_TITLE_INSTRUCTION}`
+      : CLAUDE_TITLE_INSTRUCTION;
+    args.push('--system-prompt', systemPrompt);
+    if (opts.additionalFlags) {
+      args.push(...opts.additionalFlags);
+    }
+    return args;
+  }
+
+  private attachSession(session: Session): void {
+    session.scheduler = this.scheduler;
+    session.sessionManager = this;
+    this.sessions.set(session.id, session);
+    session.onTitleChanged = (sid, title) => {
+      this.updateSessionTitle(sid, title);
+    };
+    session.onDescriptionChanged = (sid, description) => {
+      this.updateSessionDescription(sid, description);
+    };
+  }
+
+  private sendInitializeControl(session: Session): void {
+    session.sendStreamJsonMessage({
+      type: 'control_request',
+      request_id: randomUUID(),
+      request: {
+        subtype: 'initialize',
+        hooks: null,
+      },
+    });
+  }
+
   async createSession(opts: {
     workingDirectory?: string;
     model?: string;
@@ -1585,7 +1764,13 @@ export class SessionManager {
     session.description = opts.description;
     session.teamId = opts.teamId;
     session.backend = backend;
-    session.sessionOpts = { model: opts.model, permissionMode: opts.permissionMode, additionalFlags: opts.additionalFlags };
+    session.sessionOpts = {
+      model: opts.model,
+      permissionMode: opts.permissionMode,
+      additionalFlags: opts.additionalFlags,
+      systemPrompt: opts.systemPrompt,
+      resumeConversationId: opts.resumeConversationId,
+    };
     session.persistentPrompt = opts.persistentPrompt?.trim() || undefined;
     session.persistentCooldownSec = opts.persistentCooldownSec ?? this.config.persistentCooldownSec;
 
@@ -1596,6 +1781,7 @@ export class SessionManager {
         data: {
           working_directory: cwd,
           model: opts.model,
+          permission_mode: opts.permissionMode,
           resume_conversation_id: opts.resumeConversationId,
           additional_flags: opts.additionalFlags,
           title: opts.title,
@@ -1604,6 +1790,7 @@ export class SessionManager {
           backend,
           persistent_prompt: session.persistentPrompt,
           persistent_cooldown_sec: session.persistentCooldownSec,
+          system_prompt: opts.systemPrompt,
         },
       }) + '\n');
     } catch (err) {
@@ -1649,34 +1836,14 @@ export class SessionManager {
       return session;
     }
 
-    // Claude backend (existing behavior)
-    const args: string[] = [
-      '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
-      '--verbose',
-      '--replay-user-messages',
-      '--permission-prompt-tool', 'stdio',
-      '--mcp-config', JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'sdk', name: MCP_SERVER_NAME } } }),
-    ];
-
-    if (opts.model) {
-      args.push('--model', opts.model);
-    }
-    if (opts.resumeConversationId) {
-      args.push('--resume', opts.resumeConversationId);
-    }
-    if (opts.permissionMode) {
-      args.push('--permission-mode', opts.permissionMode);
-    }
-    const titleInstruction = 'IMPORTANT: After receiving the first user message, immediately call the set_session_title MCP tool to give this session a short descriptive title (3-8 words).';
-    const systemPrompt = opts.systemPrompt
-      ? `${opts.systemPrompt}\n\n${titleInstruction}`
-      : titleInstruction;
-    args.push('--system-prompt', systemPrompt);
-    if (opts.additionalFlags) {
-      args.push(...opts.additionalFlags);
-    }
+    // Claude backend
+    const args = this.buildClaudeArgs({
+      model: opts.model,
+      resumeConversationId: opts.resumeConversationId,
+      permissionMode: opts.permissionMode,
+      additionalFlags: opts.additionalFlags,
+      systemPrompt: opts.systemPrompt,
+    });
 
     logger.info(`Creating session ${sessionId}: ${this.config.claudeCmd} ${args.join(' ')} (cwd=${cwd})`);
 
@@ -1688,35 +1855,46 @@ export class SessionManager {
     });
 
     session.attach(proc);
-    session.scheduler = this.scheduler;
-    session.sessionManager = this;
-    this.sessions.set(sessionId, session);
-
-    // Wire up title change callback to persist to JSONL
-    session.onTitleChanged = (sid, title) => {
-      this.updateSessionTitle(sid, title);
-    };
-
-    // Wire up description change callback to persist to JSONL
-    session.onDescriptionChanged = (sid, description) => {
-      this.updateSessionDescription(sid, description);
-    };
-
-    // Send initialize control request required by --permission-prompt-tool-name stdio
-    session.sendStreamJsonMessage({
-      type: 'control_request',
-      request_id: randomUUID(),
-      request: {
-        subtype: 'initialize',
-        hooks: null,
-      },
-    });
+    this.attachSession(session);
+    this.sendInitializeControl(session);
 
     return session;
   }
 
   getSession(id: string): Session | undefined {
     return this.sessions.get(id);
+  }
+
+  async restartPersistentSession(id: string): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session || !session.persistentPrompt) {
+      return;
+    }
+
+    logger.info(`Restarting persistent session ${id} after assistant timeout (${session.persistentCooldownSec}s)`);
+    await session.stopForPersistentRestart();
+
+    if (session.backend === 'codex') {
+      session.rearmPersistentAfterRestart();
+      session.sendPersistentPrompt();
+      return;
+    }
+
+    const args = this.buildClaudeArgs({
+      model: session.sessionOpts.model,
+      permissionMode: session.sessionOpts.permissionMode,
+      additionalFlags: session.sessionOpts.additionalFlags,
+      systemPrompt: session.sessionOpts.systemPrompt,
+    });
+    const proc = spawn(this.config.claudeCmd, args, {
+      cwd: session.workingDirectory,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+      env: { ...process.env },
+    });
+    session.attach(proc);
+    this.sendInitializeControl(session);
+    session.sendPersistentPrompt();
   }
 
   updateSessionTitle(id: string, title: string): boolean {
@@ -1849,6 +2027,8 @@ export class SessionManager {
     let storedBackend: Backend = 'claude';
     let storedPersistentPrompt: string | undefined;
     let storedPersistentCooldownSec: number | undefined;
+    let storedSystemPrompt: string | undefined;
+    let storedPermissionMode: string | undefined;
     try {
       const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
       if (firstLine) {
@@ -1884,6 +2064,12 @@ export class SessionManager {
           if (typeof metaEvt.data?.persistent_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_cooldown_sec)) {
             storedPersistentCooldownSec = metaEvt.data.persistent_cooldown_sec;
           }
+          if (typeof metaEvt.data?.system_prompt === 'string') {
+            storedSystemPrompt = metaEvt.data.system_prompt;
+          }
+          if (typeof metaEvt.data?.permission_mode === 'string') {
+            storedPermissionMode = metaEvt.data.permission_mode;
+          }
         }
       }
     } catch {
@@ -1909,14 +2095,12 @@ export class SessionManager {
     session.backend = storedBackend;
     session.persistentPrompt = storedPersistentPrompt?.trim() || undefined;
     session.persistentCooldownSec = storedPersistentCooldownSec ?? this.config.persistentCooldownSec;
-    if (session.persistentPrompt) {
-      // Resumed persistent sessions already completed at least one run in the past.
-      session.markPersistentStarted();
-    }
     session.sessionOpts = {
       model: opts?.model || storedModel,
-      permissionMode: opts?.permissionMode,
+      permissionMode: opts?.permissionMode || storedPermissionMode,
       additionalFlags: opts?.additionalFlags || storedFlags,
+      systemPrompt: storedSystemPrompt,
+      resumeConversationId: storedResumeConversationId,
     };
     session.loadBufferFromFile(jsonlPath);
 
@@ -1937,16 +2121,7 @@ export class SessionManager {
       };
       session.status = 'ready';
       session.pushEvent('status', { status: 'ready' });
-      session.scheduler = this.scheduler;
-      session.sessionManager = this;
-      this.sessions.set(sessionId, session);
-
-      session.onTitleChanged = (sid, title) => {
-        this.updateSessionTitle(sid, title);
-      };
-      session.onDescriptionChanged = (sid, description) => {
-        this.updateSessionDescription(sid, description);
-      };
+      this.attachSession(session);
 
       logger.info(`Resumed codex session ${sessionId} with thread_id ${restoredThreadId || 'none'}`);
       return session;
@@ -1959,27 +2134,13 @@ export class SessionManager {
 
     logger.info(`Resuming session ${sessionId} with CLI session_id ${meta.cliSessionId}`);
 
-    const args: string[] = [
-      '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
-      '--verbose',
-      '--replay-user-messages',
-      '--permission-prompt-tool', 'stdio',
-      '--mcp-config', JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: 'sdk', name: MCP_SERVER_NAME } } }),
-      '--resume', meta.cliSessionId,
-    ];
-
-    if (opts?.model) {
-      args.push('--model', opts.model);
-    }
-    if (opts?.permissionMode) {
-      args.push('--permission-mode', opts.permissionMode);
-    }
-    const flagsToApply = opts?.additionalFlags || storedFlags;
-    if (flagsToApply) {
-      args.push(...flagsToApply);
-    }
+    const args = this.buildClaudeArgs({
+      model: opts?.model || storedModel,
+      resumeConversationId: meta.cliSessionId,
+      permissionMode: opts?.permissionMode || storedPermissionMode,
+      additionalFlags: opts?.additionalFlags || storedFlags,
+      systemPrompt: storedSystemPrompt,
+    });
 
     logger.info(`Spawning resumed session ${sessionId}: ${this.config.claudeCmd} ${args.join(' ')} (cwd=${workingDirectory})`);
 
@@ -1991,29 +2152,8 @@ export class SessionManager {
     });
 
     session.attach(proc);
-    session.scheduler = this.scheduler;
-    session.sessionManager = this;
-    this.sessions.set(sessionId, session);
-
-    // Wire up title change callback to persist to JSONL
-    session.onTitleChanged = (sid, title) => {
-      this.updateSessionTitle(sid, title);
-    };
-
-    // Wire up description change callback to persist to JSONL
-    session.onDescriptionChanged = (sid, description) => {
-      this.updateSessionDescription(sid, description);
-    };
-
-    // Send initialize control request
-    session.sendStreamJsonMessage({
-      type: 'control_request',
-      request_id: randomUUID(),
-      request: {
-        subtype: 'initialize',
-        hooks: null,
-      },
-    });
+    this.attachSession(session);
+    this.sendInitializeControl(session);
 
     return session;
   }

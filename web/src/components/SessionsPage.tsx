@@ -293,12 +293,12 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
           <textarea
             value={persistentPrompt}
             onChange={(e) => setPersistentPrompt(e.target.value)}
-            placeholder="If set, this session will auto-run this prompt repeatedly. Manual user messages are disabled."
+            placeholder="If set, this session will auto-run this prompt and restart after assistant inactivity timeout."
             rows={4}
             style={{ width: '100%', resize: 'vertical' }}
           />
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
-            Session will run immediately once ready, then restart after cooldown whenever it returns to ready.
+            Session runs once when ready. After the last assistant message is older than cooldown, the server clears and restarts the session with this prompt.
           </div>
         </div>
         <div className="field">
