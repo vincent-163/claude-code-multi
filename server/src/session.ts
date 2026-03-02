@@ -69,6 +69,15 @@ export class Session {
   /** Session creation options, used to propagate to scheduled tasks */
   sessionOpts: { model?: string; permissionMode?: string; additionalFlags?: string[] } = {};
 
+  /** Persistent session prompt. If set, the session auto-restarts with this prompt when ready. */
+  persistentPrompt: string | undefined;
+  /** Cooldown in seconds between persistent prompt runs after the first run. */
+  persistentCooldownSec: number = 900;
+  /** Next scheduled persistent run time (epoch seconds). */
+  persistentNextRunAt: number | undefined;
+  private persistentHasStarted: boolean = false;
+  private persistentTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Called when the title is changed via MCP tool */
   onTitleChanged: ((sessionId: string, title: string) => void) | null = null;
 
@@ -256,6 +265,70 @@ export class Session {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Send this session's configured persistent prompt as a user message.
+   * Returns false when not configured or when dispatch fails.
+   */
+  sendPersistentPrompt(): boolean {
+    if (!this.persistentPrompt) return false;
+    this.lastActiveAt = Date.now() / 1000;
+    this.lastUserMessageAt = this.lastActiveAt;
+    const content = this.persistentPrompt;
+    if (this.backend === 'codex') {
+      this.sendCodexMessage(content);
+      return true;
+    }
+    return this.sendInput(JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content },
+    }));
+  }
+
+  markPersistentStarted(): void {
+    this.persistentHasStarted = true;
+  }
+
+  private clearPersistentTimer(): void {
+    if (this.persistentTimer) {
+      clearTimeout(this.persistentTimer);
+      this.persistentTimer = null;
+    }
+    this.persistentNextRunAt = undefined;
+  }
+
+  private schedulePersistentPrompt(delaySec: number): void {
+    if (!this.persistentPrompt || this.status === 'dead') return;
+    this.clearPersistentTimer();
+    const safeDelay = Math.max(0, delaySec);
+    this.persistentNextRunAt = Date.now() / 1000 + safeDelay;
+    this.persistentTimer = setTimeout(() => {
+      this.persistentTimer = null;
+      this.persistentNextRunAt = undefined;
+      if (!this.persistentPrompt || this.status !== 'ready') {
+        return;
+      }
+      const ok = this.sendPersistentPrompt();
+      if (ok) {
+        this.persistentHasStarted = true;
+      } else {
+        // Retry shortly on transient failures (e.g. process transitioning).
+        this.schedulePersistentPrompt(5);
+      }
+    }, safeDelay * 1000);
+  }
+
+  private handlePersistentOnStatus(status: SessionStatus): void {
+    if (!this.persistentPrompt) return;
+    if (status === 'ready') {
+      const delay = this.persistentHasStarted ? this.persistentCooldownSec : 0;
+      this.schedulePersistentPrompt(delay);
+      return;
+    }
+    if (status === 'dead' || status === 'busy' || status === 'waiting_for_input' || status === 'starting') {
+      this.clearPersistentTimer();
     }
   }
 
@@ -747,6 +820,7 @@ export class Session {
   }
 
   async destroy(): Promise<void> {
+    this.clearPersistentTimer();
     // Kill codex turn process if running
     if (this.codexTurnProcess) {
       try { this.codexTurnProcess.kill('SIGTERM'); } catch { /* ignore */ }
@@ -817,6 +891,10 @@ export class Session {
       backend: this.backend,
       last_user_message_at: this.lastUserMessageAt,
       last_assistant_message_at: this.lastAssistantMessageAt,
+      persistent_prompt: this.persistentPrompt,
+      persistent_cooldown_sec: this.persistentCooldownSec,
+      persistent_next_run_at: this.persistentNextRunAt,
+      persistent: !!this.persistentPrompt,
     };
   }
 
@@ -835,6 +913,9 @@ export class Session {
       backend: this.backend,
       last_user_message_at: this.lastUserMessageAt,
       last_assistant_message_at: this.lastAssistantMessageAt,
+      persistent_cooldown_sec: this.persistentCooldownSec,
+      persistent_next_run_at: this.persistentNextRunAt,
+      persistent: !!this.persistentPrompt,
     };
   }
 
@@ -1436,6 +1517,10 @@ export class Session {
       }
     }
 
+    if (event === 'status' && typeof data === 'object' && data !== null && typeof (data as Record<string, unknown>).status === 'string') {
+      this.handlePersistentOnStatus((data as { status: SessionStatus }).status);
+    }
+
     for (const fn of this.subscribers) {
       try {
         fn(buffered);
@@ -1481,6 +1566,8 @@ export class SessionManager {
     description?: string;
     teamId?: string;
     backend?: Backend;
+    persistentPrompt?: string;
+    persistentCooldownSec?: number;
   }): Promise<Session> {
     if (this.activeCount >= this.config.maxSessions) {
       throw new Error('Max sessions reached');
@@ -1499,12 +1586,25 @@ export class SessionManager {
     session.teamId = opts.teamId;
     session.backend = backend;
     session.sessionOpts = { model: opts.model, permissionMode: opts.permissionMode, additionalFlags: opts.additionalFlags };
+    session.persistentPrompt = opts.persistentPrompt?.trim() || undefined;
+    session.persistentCooldownSec = opts.persistentCooldownSec ?? this.config.persistentCooldownSec;
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
       fs.appendFileSync(jsonlPath, JSON.stringify({
         id: 0, event: 'meta', timestamp: Date.now() / 1000,
-        data: { working_directory: cwd, model: opts.model, resume_conversation_id: opts.resumeConversationId, additional_flags: opts.additionalFlags, title: opts.title, description: opts.description, team_id: opts.teamId, backend },
+        data: {
+          working_directory: cwd,
+          model: opts.model,
+          resume_conversation_id: opts.resumeConversationId,
+          additional_flags: opts.additionalFlags,
+          title: opts.title,
+          description: opts.description,
+          team_id: opts.teamId,
+          backend,
+          persistent_prompt: session.persistentPrompt,
+          persistent_cooldown_sec: session.persistentCooldownSec,
+        },
       }) + '\n');
     } catch (err) {
       logger.warn(`Failed to write meta to ${jsonlPath}: ${err}`);
@@ -1747,6 +1847,8 @@ export class SessionManager {
     let storedDescription: string | undefined;
     let storedTeamId: string | undefined;
     let storedBackend: Backend = 'claude';
+    let storedPersistentPrompt: string | undefined;
+    let storedPersistentCooldownSec: number | undefined;
     try {
       const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
       if (firstLine) {
@@ -1776,6 +1878,12 @@ export class SessionManager {
           if (metaEvt.data?.backend) {
             storedBackend = metaEvt.data.backend as Backend;
           }
+          if (typeof metaEvt.data?.persistent_prompt === 'string') {
+            storedPersistentPrompt = metaEvt.data.persistent_prompt;
+          }
+          if (typeof metaEvt.data?.persistent_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_cooldown_sec)) {
+            storedPersistentCooldownSec = metaEvt.data.persistent_cooldown_sec;
+          }
         }
       }
     } catch {
@@ -1799,6 +1907,12 @@ export class SessionManager {
     session.description = storedDescription;
     session.teamId = storedTeamId;
     session.backend = storedBackend;
+    session.persistentPrompt = storedPersistentPrompt?.trim() || undefined;
+    session.persistentCooldownSec = storedPersistentCooldownSec ?? this.config.persistentCooldownSec;
+    if (session.persistentPrompt) {
+      // Resumed persistent sessions already completed at least one run in the past.
+      session.markPersistentStarted();
+    }
     session.sessionOpts = {
       model: opts?.model || storedModel,
       permissionMode: opts?.permissionMode,
@@ -1822,6 +1936,7 @@ export class SessionManager {
         model: opts?.model || storedModel,
       };
       session.status = 'ready';
+      session.pushEvent('status', { status: 'ready' });
       session.scheduler = this.scheduler;
       session.sessionManager = this;
       this.sessions.set(sessionId, session);
@@ -1929,6 +2044,8 @@ export class SessionManager {
         let teamId: string | undefined;
         let resumeConversationId: string | undefined;
         let backend: string = 'claude';
+        let persistentPrompt: string | undefined;
+        let persistentCooldownSec: number = this.config.persistentCooldownSec;
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
           if (firstLine) {
@@ -1952,6 +2069,12 @@ export class SessionManager {
               if (metaEvt.data?.backend) {
                 backend = metaEvt.data.backend;
               }
+              if (typeof metaEvt.data?.persistent_prompt === 'string') {
+                persistentPrompt = metaEvt.data.persistent_prompt;
+              }
+              if (typeof metaEvt.data?.persistent_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_cooldown_sec)) {
+                persistentCooldownSec = metaEvt.data.persistent_cooldown_sec;
+              }
             }
           }
         } catch {
@@ -1969,6 +2092,8 @@ export class SessionManager {
           description,
           team_id: teamId,
           backend,
+          persistent_cooldown_sec: persistentCooldownSec,
+          persistent: !!persistentPrompt,
         });
       }
     } catch (err) {

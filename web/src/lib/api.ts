@@ -31,6 +31,8 @@ export async function createSession(
     dangerously_skip_permissions?: boolean;
     additional_flags?: string[];
     backend?: string;
+    persistent_prompt?: string;
+    cooldown_timeout_sec?: number;
   },
 ): Promise<Session> {
   const res = await fetch(`${baseUrl(settings)}/sessions`, {

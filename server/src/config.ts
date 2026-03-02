@@ -22,6 +22,8 @@ export interface Config {
   codexApiKey: string;
   /** OPENAI_BASE_URL for Codex sessions (e.g. http://127.0.0.1:4000/v1). */
   codexBaseUrl: string;
+  /** Default cooldown (seconds) before restarting a persistent session after it becomes ready. */
+  persistentCooldownSec: number;
 }
 
 export function loadConfig(): Config {
@@ -46,5 +48,6 @@ export function loadConfig(): Config {
     codexCmd: process.env.CC_CODEX_CMD || 'codex',
     codexApiKey: process.env.CC_CODEX_API_KEY || '',
     codexBaseUrl: process.env.CC_CODEX_BASE_URL || '',
+    persistentCooldownSec: parseInt(process.env.CC_PERSISTENT_COOLDOWN_SEC || '900', 10),
   };
 }

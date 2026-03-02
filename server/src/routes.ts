@@ -49,6 +49,14 @@ export function createRoutes(manager: SessionManager): Router {
       if (body.dangerously_skip_permissions) {
         additionalFlags.push('--dangerously-skip-permissions');
       }
+      const persistentPrompt = typeof body.persistent_prompt === 'string'
+        ? body.persistent_prompt.trim()
+        : '';
+      const requestedCooldown = body.cooldown_timeout_sec;
+      const cooldownTimeoutSec =
+        typeof requestedCooldown === 'number' && Number.isFinite(requestedCooldown) && requestedCooldown > 0
+          ? Math.floor(requestedCooldown)
+          : undefined;
       const session = await manager.createSession({
         workingDirectory: body.working_directory,
         model: body.model,
@@ -57,6 +65,8 @@ export function createRoutes(manager: SessionManager): Router {
         systemPrompt: body.system_prompt,
         additionalFlags: additionalFlags.length > 0 ? additionalFlags : undefined,
         backend: body.backend,
+        persistentPrompt: persistentPrompt || undefined,
+        persistentCooldownSec: cooldownTimeoutSec,
       });
       res.status(201).json(session.toJSON());
     } catch (err: unknown) {
@@ -114,6 +124,10 @@ export function createRoutes(manager: SessionManager): Router {
     }
 
     if (msgType === 'user_message') {
+      if (session.persistentPrompt) {
+        res.status(400).json({ error: 'user_message is disabled for persistent sessions' });
+        return;
+      }
       const content = body.content;
       if (typeof content !== 'string' || !content) {
         res.status(400).json({ error: 'content is required for user_message' });

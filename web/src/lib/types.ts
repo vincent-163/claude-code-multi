@@ -19,6 +19,10 @@ export interface Session {
   backend?: Backend;
   last_user_message_at?: number;
   last_assistant_message_at?: number;
+  persistent?: boolean;
+  persistent_prompt?: string;
+  persistent_cooldown_sec?: number;
+  persistent_next_run_at?: number;
 }
 
 // --- Chat Messages ---

@@ -51,11 +51,18 @@ POST /sessions
   "model": "opus",
   "resume_conversation_id": "uuid-string",
   "permission_mode": "default",
-  "system_prompt": "optional custom system prompt"
+  "system_prompt": "optional custom system prompt",
+  "persistent_prompt": "optional prompt for auto-restart mode",
+  "cooldown_timeout_sec": 900
 }
 ```
 
 All fields are optional. `working_directory` defaults to the server's CWD. `model` is passed to `claude` via `--model` and to `codex` via `-m`. `resume_conversation_id` resumes a prior conversation (`--resume` for Claude, `thread_id` resume for Codex). `permission_mode` sets the permission mode (default, plan, bypassPermissions, etc.).
+
+If `persistent_prompt` is set, the session enters persistent mode:
+- The prompt is sent automatically when the session becomes `ready`.
+- The first run starts immediately; later runs wait `cooldown_timeout_sec` (default `900`).
+- `user_message` input is rejected for that session.
 
 **Response** `201 Created`:
 ```json
@@ -146,6 +153,8 @@ Message types:
 - `user_message` — send a prompt to Claude (writes to stdin as stream-json)
 - `tool_result` — respond to a tool use confirmation (`content` is the response)
 - `interrupt` — send SIGINT to the process (no `content` needed)
+
+For persistent sessions, `user_message` is not allowed and returns `400`.
 
 **Response** `200 OK`:
 ```json
@@ -254,6 +263,7 @@ Environment variables:
 | `CC_AUTH_TOKENS` | (none) | Comma-separated list of valid auth tokens. If empty, auth is disabled. |
 | `CC_BUFFER_SIZE` | `1000` | Max output messages to buffer per session |
 | `CC_SESSION_TIMEOUT` | `3600` | Seconds of inactivity before session cleanup |
+| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default cooldown (seconds) between persistent prompt runs |
 | `CC_LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
 
 ## Error Format

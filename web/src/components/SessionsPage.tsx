@@ -142,7 +142,16 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
         <div className="id">{s.id}</div>
       </div>
       <div className="meta">
-        <div>{s.status}{s.backend === 'codex' ? ' · Codex' : s.backend === 'claude' ? ' · Claude' : ''}</div>
+        <div>
+          {s.status}
+          {s.backend === 'codex' ? ' · Codex' : s.backend === 'claude' ? ' · Claude' : ''}
+          {s.persistent ? ' · Persistent' : ''}
+        </div>
+        {s.persistent && (
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            cooldown {s.persistent_cooldown_sec ?? 900}s
+          </div>
+        )}
         {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
         <div style={{ fontSize: 11 }}>
           {s.last_user_message_at ? `👤 ${formatElapsed(s.last_user_message_at)}` : ''}
@@ -209,6 +218,8 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
   const [backend, setBackend] = useState<Backend>(settings.defaultBackend)
   const [skipPerms, setSkipPerms] = useState(false)
   const [flags, setFlags] = useState('')
+  const [persistentPrompt, setPersistentPrompt] = useState('')
+  const [cooldownSec, setCooldownSec] = useState('900')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
@@ -227,6 +238,10 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
         dangerously_skip_permissions: skipPerms,
         additional_flags: flags ? flags.split(/\s+/).filter(Boolean) : undefined,
         backend,
+        persistent_prompt: persistentPrompt.trim() || undefined,
+        cooldown_timeout_sec: persistentPrompt.trim()
+          ? Math.max(1, parseInt(cooldownSec || '900', 10) || 900)
+          : undefined,
       })
       onCreated(session)
     } catch (err) {
@@ -272,6 +287,28 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
         <div className="field">
           <label>Extra Flags</label>
           <input value={flags} onChange={(e) => setFlags(e.target.value)} placeholder="--flag1 --flag2" />
+        </div>
+        <div className="field">
+          <label>Persistent Prompt (optional)</label>
+          <textarea
+            value={persistentPrompt}
+            onChange={(e) => setPersistentPrompt(e.target.value)}
+            placeholder="If set, this session will auto-run this prompt repeatedly. Manual user messages are disabled."
+            rows={4}
+            style={{ width: '100%', resize: 'vertical' }}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+            Session will run immediately once ready, then restart after cooldown whenever it returns to ready.
+          </div>
+        </div>
+        <div className="field">
+          <label>Cooldown Seconds</label>
+          <input
+            value={cooldownSec}
+            onChange={(e) => setCooldownSec(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="900"
+            disabled={!persistentPrompt.trim()}
+          />
         </div>
         {backend === 'claude' && (
           <div className="field">

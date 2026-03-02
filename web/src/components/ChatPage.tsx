@@ -42,6 +42,9 @@ export default function ChatPage({ settings, onBack }: Props) {
   const [resolvedPlanExits, setResolvedPlanExits] = useState<Set<string>>(new Set())
   const [title, setTitle] = useState<string | undefined>(undefined)
   const [sessionBackend, setSessionBackend] = useState<Backend | undefined>(undefined)
+  const [persistentPrompt, setPersistentPrompt] = useState<string | undefined>(undefined)
+  const [persistentCooldownSec, setPersistentCooldownSec] = useState<number>(900)
+  const [persistentNextRunAt, setPersistentNextRunAt] = useState<number | undefined>(undefined)
   const [editingTitle, setEditingTitle] = useState(false)
   const [editTitleValue, setEditTitleValue] = useState('')
   const titleInputRef = useRef<HTMLInputElement>(null)
@@ -93,6 +96,10 @@ export default function ChatPage({ settings, onBack }: Props) {
   useEffect(() => {
     if (!sessionId) return
 
+    setPersistentPrompt(undefined)
+    setPersistentCooldownSec(900)
+    setPersistentNextRunAt(undefined)
+
     let sseCleanup: (() => void) | undefined
 
       ; (async () => {
@@ -101,6 +108,9 @@ export default function ChatPage({ settings, onBack }: Props) {
           setStatus(data.status)
           if (data.title) setTitle(data.title)
           if (data.backend) setSessionBackend(data.backend as Backend)
+          setPersistentPrompt(data.persistent_prompt)
+          setPersistentCooldownSec(data.persistent_cooldown_sec ?? 900)
+          setPersistentNextRunAt(data.persistent_next_run_at)
           if (data.total_cost_usd) setCost(data.total_cost_usd)
 
           // Parse history
@@ -232,6 +242,7 @@ export default function ChatPage({ settings, onBack }: Props) {
   const sendMessage = async () => {
     const text = input.trim()
     if (!text || !sessionId) return
+    if (persistentPrompt) return
     setInput('')
     setMessages((prev) => [...prev, { kind: 'user', content: text }])
     try {
@@ -336,6 +347,7 @@ export default function ChatPage({ settings, onBack }: Props) {
   }
 
   const isBusy = status === 'busy' || status === 'starting'
+  const isPersistent = !!persistentPrompt
   const statusBadgeStyle: React.CSSProperties = {
     background: status === 'ready' ? 'var(--green)' : status === 'busy' || status === 'starting' ? 'var(--orange)' : status === 'waiting_for_input' ? 'var(--blue)' : 'var(--red)',
     color: '#000',
@@ -361,6 +373,12 @@ export default function ChatPage({ settings, onBack }: Props) {
             </div>
           )}
           <div className="subtitle">{cost > 0 ? `$${cost.toFixed(4)}` : ''}</div>
+          {isPersistent && (
+            <div className="subtitle">
+              persistent · cooldown {persistentCooldownSec}s
+              {persistentNextRunAt ? ` · next ${Math.max(0, Math.ceil(persistentNextRunAt - Date.now() / 1000))}s` : ''}
+            </div>
+          )}
         </div>
         {sessionBackend && <span className="status-badge" style={{ background: sessionBackend === 'codex' ? 'var(--blue)' : 'var(--green)', color: '#000', marginRight: 4 }}>{sessionBackend === 'codex' ? 'Codex' : 'Claude'}</span>}
         <span className="status-badge" style={statusBadgeStyle}>{status}</span>
@@ -382,12 +400,12 @@ export default function ChatPage({ settings, onBack }: Props) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={status === 'dead' ? 'Session ended' : 'Send a message...'}
-          disabled={status === 'dead'}
+          placeholder={status === 'dead' ? 'Session ended' : isPersistent ? 'Persistent session (manual user messages disabled)' : 'Send a message...'}
+          disabled={status === 'dead' || isPersistent}
           rows={1}
         />
         <div className="btn-group">
-          <button className="primary" onClick={sendMessage} disabled={!input.trim() || status === 'dead'}>
+          <button className="primary" onClick={sendMessage} disabled={!input.trim() || status === 'dead' || isPersistent}>
             Send
           </button>
         </div>

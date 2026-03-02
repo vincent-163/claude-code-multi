@@ -43,6 +43,7 @@ All configuration is via environment variables:
 | `CC_AUTH_TOKENS` | (none) | Comma-separated list of valid Bearer tokens. If empty, auth is disabled. |
 | `CC_BUFFER_SIZE` | `1000` | Max output messages to buffer per session (for reconnect history) |
 | `CC_SESSION_TIMEOUT` | `3600` | Seconds of inactivity before session auto-cleanup |
+| `CC_PERSISTENT_COOLDOWN_SEC` | `900` | Default cooldown seconds between persistent prompt reruns |
 | `CC_LOG_LEVEL` | `info` | Logging level (`debug`, `info`, `warn`, `error`) |
 
 ## API Overview
@@ -69,6 +70,8 @@ Send via `POST /sessions/:id/input`:
 - `user_message` — send a prompt to Claude (`{"type":"user_message","content":"..."}`)
 - `tool_result` — respond to a tool use confirmation
 - `interrupt` — send SIGINT to the process
+
+When a session is created with `persistent_prompt`, `user_message` is disabled. The server automatically resubmits the configured prompt whenever the session returns to `ready` (first run immediately, then after cooldown).
 
 ### SSE Stream Events
 
