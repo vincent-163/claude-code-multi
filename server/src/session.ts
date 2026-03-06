@@ -1535,14 +1535,20 @@ export class Session {
         this.totalCostUsd = totalCost;
       }
 
+      // Reset auto-compact pending flag after any result (compact or regular turn)
+      if (this.autoCompactPending) {
+        this.autoCompactPending = false;
+        logger.info(`Session ${this.id} auto-compact completed, resetting flag`);
+      }
+
       // Check auto-compact threshold now that the turn is complete.
       // Context usage was already tracked from assistant messages during the turn.
-      // Skip if this result has zero usage (e.g. compact result) to avoid re-triggering.
+      // Only check if we're not already waiting for a compact to complete.
       const resultUsage = parsed.usage as Record<string, number> | undefined;
       const hasUsage = resultUsage && (
         (resultUsage.input_tokens || 0) + (resultUsage.cache_creation_input_tokens || 0) + (resultUsage.cache_read_input_tokens || 0) > 0
       );
-      if (hasUsage) {
+      if (hasUsage && !this.autoCompactPending) {
         this.checkAutoCompact();
       }
 
@@ -1610,9 +1616,10 @@ export class Session {
           });
         } else {
           logger.warn(`Session ${this.id} failed to send auto-compact`);
+          // Reset flag if we failed to send the command
+          this.autoCompactPending = false;
         }
-        // Reset after compact completes (next result will re-evaluate)
-        this.autoCompactPending = false;
+        // Keep autoCompactPending = true until the compact result is received
       }, 500);
     }
   }
