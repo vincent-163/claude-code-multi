@@ -80,6 +80,8 @@ export class Session {
   persistentPrompt: string | undefined;
   /** Cooldown in seconds between persistent prompt runs after the first run. */
   persistentCooldownSec: number = 900;
+  /** Additional cooldown (seconds) after session becomes ready before sending the persistent prompt. 0 = immediate. */
+  persistentReadyCooldownSec: number = 0;
   /** Next scheduled persistent run/restart time (epoch seconds). */
   persistentNextRunAt: number | undefined;
   private persistentHasStarted: boolean = false;
@@ -303,7 +305,7 @@ export class Session {
     return ok;
   }
 
-  configurePersistent(prompt: string | undefined, cooldownSec: number): void {
+  configurePersistent(prompt: string | undefined, cooldownSec: number, readyCooldownSec?: number): void {
     const normalizedPrompt = prompt?.trim() || undefined;
     const normalizedCooldown = Math.max(1, Math.floor(cooldownSec));
     const promptChanged = normalizedPrompt !== this.persistentPrompt;
@@ -311,6 +313,9 @@ export class Session {
 
     this.persistentPrompt = normalizedPrompt;
     this.persistentCooldownSec = normalizedCooldown;
+    if (readyCooldownSec !== undefined) {
+      this.persistentReadyCooldownSec = Math.max(0, Math.floor(readyCooldownSec));
+    }
 
     if (!this.persistentPrompt) {
       this.persistentHasStarted = false;
@@ -348,13 +353,18 @@ export class Session {
     if (!this.persistentPrompt || this.status !== 'ready') return;
     if (this.persistentHasStarted || this.persistentRestartInProgress) return;
     this.clearPersistentTimer();
-    this.persistentNextRunAt = Date.now() / 1000;
+    const delaySec = Math.max(0, this.persistentReadyCooldownSec);
+    const delayMs = delaySec * 1000;
+    this.persistentNextRunAt = Date.now() / 1000 + delaySec;
+    if (delaySec > 0) {
+      logger.info(`Session ${this.id} ready cooldown: waiting ${delaySec}s before sending persistent prompt`);
+    }
     this.persistentTimer = setTimeout(() => {
       this.persistentTimer = null;
       this.persistentNextRunAt = undefined;
       if (!this.persistentPrompt || this.status !== 'ready') return;
       this.sendPersistentPrompt();
-    }, 0);
+    }, delayMs);
   }
 
   private schedulePersistentRestartFromAssistant(): void {
@@ -416,6 +426,7 @@ export class Session {
         backend: this.backend,
         persistent_prompt: this.persistentPrompt,
         persistent_cooldown_sec: this.persistentCooldownSec,
+        persistent_ready_cooldown_sec: this.persistentReadyCooldownSec,
         system_prompt: this.sessionOpts.systemPrompt,
       },
     });
@@ -1047,6 +1058,7 @@ export class Session {
       last_assistant_message_at: this.lastAssistantMessageAt,
       persistent_prompt: this.persistentPrompt,
       persistent_cooldown_sec: this.persistentCooldownSec,
+      persistent_ready_cooldown_sec: this.persistentReadyCooldownSec,
       persistent_next_run_at: this.persistentNextRunAt,
       persistent: !!this.persistentPrompt,
     };
@@ -1069,6 +1081,7 @@ export class Session {
       last_assistant_message_at: this.lastAssistantMessageAt,
       persistent_prompt: this.persistentPrompt,
       persistent_cooldown_sec: this.persistentCooldownSec,
+      persistent_ready_cooldown_sec: this.persistentReadyCooldownSec,
       persistent_next_run_at: this.persistentNextRunAt,
       persistent: !!this.persistentPrompt,
     };
@@ -1788,6 +1801,7 @@ export class SessionManager {
     backend?: Backend;
     persistentPrompt?: string;
     persistentCooldownSec?: number;
+    persistentReadyCooldownSec?: number;
   }): Promise<Session> {
     if (this.activeCount >= this.config.maxSessions) {
       throw new Error('Max sessions reached');
@@ -1814,6 +1828,7 @@ export class SessionManager {
     };
     session.persistentPrompt = opts.persistentPrompt?.trim() || undefined;
     session.persistentCooldownSec = opts.persistentCooldownSec ?? this.config.persistentCooldownSec;
+    session.persistentReadyCooldownSec = opts.persistentReadyCooldownSec ?? this.config.persistentReadyCooldownSec;
 
     // Write a metadata line as the first entry so we can recover working_directory later
     try {
@@ -1831,6 +1846,7 @@ export class SessionManager {
           backend,
           persistent_prompt: session.persistentPrompt,
           persistent_cooldown_sec: session.persistentCooldownSec,
+          persistent_ready_cooldown_sec: session.persistentReadyCooldownSec,
           system_prompt: opts.systemPrompt,
         },
       }) + '\n');
@@ -2006,10 +2022,12 @@ export class SessionManager {
   updateSessionPersistentConfig(id: string, opts: {
     persistentPrompt?: string;
     persistentCooldownSec?: number;
+    persistentReadyCooldownSec?: number;
   }): boolean {
     const hasPrompt = Object.prototype.hasOwnProperty.call(opts, 'persistentPrompt');
     const hasCooldown = Object.prototype.hasOwnProperty.call(opts, 'persistentCooldownSec');
-    if (!hasPrompt && !hasCooldown) {
+    const hasReadyCooldown = Object.prototype.hasOwnProperty.call(opts, 'persistentReadyCooldownSec');
+    if (!hasPrompt && !hasCooldown && !hasReadyCooldown) {
       return false;
     }
 
@@ -2018,11 +2036,14 @@ export class SessionManager {
     const normalizedCooldown = hasCooldown
       ? Math.max(1, Math.floor(opts.persistentCooldownSec ?? this.config.persistentCooldownSec))
       : undefined;
+    const normalizedReadyCooldown = hasReadyCooldown
+      ? Math.max(0, Math.floor(opts.persistentReadyCooldownSec ?? this.config.persistentReadyCooldownSec))
+      : undefined;
 
     if (session) {
       const nextPrompt = hasPrompt ? normalizedPrompt : session.persistentPrompt;
       const nextCooldown = hasCooldown ? (normalizedCooldown ?? session.persistentCooldownSec) : session.persistentCooldownSec;
-      session.configurePersistent(nextPrompt, nextCooldown);
+      session.configurePersistent(nextPrompt, nextCooldown, hasReadyCooldown ? normalizedReadyCooldown : undefined);
     }
 
     const persisted = this.updateSessionMeta(id, (data) => {
@@ -2031,6 +2052,9 @@ export class SessionManager {
       }
       if (hasCooldown) {
         data.persistent_cooldown_sec = normalizedCooldown;
+      }
+      if (hasReadyCooldown) {
+        data.persistent_ready_cooldown_sec = normalizedReadyCooldown;
       }
     }, 'persistent config');
 
@@ -2073,6 +2097,7 @@ export class SessionManager {
     let storedBackend: Backend = 'claude';
     let storedPersistentPrompt: string | undefined;
     let storedPersistentCooldownSec: number | undefined;
+    let storedPersistentReadyCooldownSec: number | undefined;
     let storedSystemPrompt: string | undefined;
     let storedPermissionMode: string | undefined;
     try {
@@ -2110,6 +2135,9 @@ export class SessionManager {
           if (typeof metaEvt.data?.persistent_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_cooldown_sec)) {
             storedPersistentCooldownSec = metaEvt.data.persistent_cooldown_sec;
           }
+          if (typeof metaEvt.data?.persistent_ready_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_ready_cooldown_sec)) {
+            storedPersistentReadyCooldownSec = metaEvt.data.persistent_ready_cooldown_sec;
+          }
           if (typeof metaEvt.data?.system_prompt === 'string') {
             storedSystemPrompt = metaEvt.data.system_prompt;
           }
@@ -2141,6 +2169,7 @@ export class SessionManager {
     session.backend = storedBackend;
     session.persistentPrompt = storedPersistentPrompt?.trim() || undefined;
     session.persistentCooldownSec = storedPersistentCooldownSec ?? this.config.persistentCooldownSec;
+    session.persistentReadyCooldownSec = storedPersistentReadyCooldownSec ?? this.config.persistentReadyCooldownSec;
     session.sessionOpts = {
       model: opts?.model || storedModel,
       permissionMode: opts?.permissionMode || storedPermissionMode,
@@ -2232,6 +2261,7 @@ export class SessionManager {
         let backend: string = 'claude';
         let persistentPrompt: string | undefined;
         let persistentCooldownSec: number = this.config.persistentCooldownSec;
+        let persistentReadyCooldownSec: number = this.config.persistentReadyCooldownSec;
         try {
           const firstLine = fs.readFileSync(jsonlPath, 'utf-8').split('\n')[0];
           if (firstLine) {
@@ -2261,6 +2291,9 @@ export class SessionManager {
               if (typeof metaEvt.data?.persistent_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_cooldown_sec)) {
                 persistentCooldownSec = metaEvt.data.persistent_cooldown_sec;
               }
+              if (typeof metaEvt.data?.persistent_ready_cooldown_sec === 'number' && Number.isFinite(metaEvt.data.persistent_ready_cooldown_sec)) {
+                persistentReadyCooldownSec = metaEvt.data.persistent_ready_cooldown_sec;
+              }
             }
           }
         } catch {
@@ -2280,6 +2313,7 @@ export class SessionManager {
           backend,
           persistent_prompt: persistentPrompt,
           persistent_cooldown_sec: persistentCooldownSec,
+          persistent_ready_cooldown_sec: persistentReadyCooldownSec,
           persistent: !!persistentPrompt,
         });
       }

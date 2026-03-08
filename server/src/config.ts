@@ -24,6 +24,8 @@ export interface Config {
   codexBaseUrl: string;
   /** Default cooldown (seconds) before restarting a persistent session after it becomes ready. */
   persistentCooldownSec: number;
+  /** Default additional cooldown (seconds) after session becomes ready before sending the persistent prompt. 0 = immediate. */
+  persistentReadyCooldownSec: number;
 }
 
 export function loadConfig(): Config {
@@ -49,5 +51,6 @@ export function loadConfig(): Config {
     codexApiKey: process.env.CC_CODEX_API_KEY || '',
     codexBaseUrl: process.env.CC_CODEX_BASE_URL || '',
     persistentCooldownSec: parseInt(process.env.CC_PERSISTENT_COOLDOWN_SEC || '900', 10),
+    persistentReadyCooldownSec: parseInt(process.env.CC_PERSISTENT_READY_COOLDOWN_SEC || '0', 10),
   };
 }

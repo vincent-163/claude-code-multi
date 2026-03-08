@@ -59,7 +59,7 @@ const server = app.listen(config.port, config.host, () => {
   logger.info(`Auth: ${config.authTokens.length > 0 ? 'enabled' : 'disabled (no tokens configured)'}`);
   logger.info(`Max sessions: ${config.maxSessions}, buffer size: ${config.bufferSize}`);
   logger.info(`Session timeout: ${config.sessionTimeoutSec}s`);
-  logger.info(`Persistent cooldown default: ${config.persistentCooldownSec}s`);
+  logger.info(`Persistent cooldown default: ${config.persistentCooldownSec}s, ready cooldown: ${config.persistentReadyCooldownSec}s`);
 });
 
 server.on('error', (err) => {

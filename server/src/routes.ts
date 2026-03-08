@@ -57,6 +57,11 @@ export function createRoutes(manager: SessionManager): Router {
         typeof requestedCooldown === 'number' && Number.isFinite(requestedCooldown) && requestedCooldown > 0
           ? Math.floor(requestedCooldown)
           : undefined;
+      const requestedReadyCooldown = body.persistent_ready_cooldown_sec;
+      const readyCooldownSec =
+        typeof requestedReadyCooldown === 'number' && Number.isFinite(requestedReadyCooldown) && requestedReadyCooldown >= 0
+          ? Math.floor(requestedReadyCooldown)
+          : undefined;
       const session = await manager.createSession({
         workingDirectory: body.working_directory,
         model: body.model,
@@ -67,6 +72,7 @@ export function createRoutes(manager: SessionManager): Router {
         backend: body.backend,
         persistentPrompt: persistentPrompt || undefined,
         persistentCooldownSec: cooldownTimeoutSec,
+        persistentReadyCooldownSec: readyCooldownSec,
       });
       res.status(201).json(session.toJSON());
     } catch (err: unknown) {
@@ -217,19 +223,25 @@ export function createRoutes(manager: SessionManager): Router {
 
   // --- Update Session (title, description, persistent config) ---
   router.patch('/sessions/:id', (req: Request, res: Response) => {
-    const { title, description, persistent_prompt, persistent_cooldown_sec } = req.body || {};
+    const { title, description, persistent_prompt, persistent_cooldown_sec, persistent_ready_cooldown_sec } = req.body || {};
     const hasTitle = typeof title === 'string';
     const hasDescription = typeof description === 'string';
     const hasPersistentPrompt = typeof persistent_prompt === 'string';
     const hasPersistentCooldown = typeof persistent_cooldown_sec === 'number';
+    const hasPersistentReadyCooldown = typeof persistent_ready_cooldown_sec === 'number';
 
     if (hasPersistentCooldown && (!Number.isFinite(persistent_cooldown_sec) || persistent_cooldown_sec < 1)) {
       res.status(400).json({ error: 'persistent_cooldown_sec must be a number >= 1' });
       return;
     }
 
-    if (!hasTitle && !hasDescription && !hasPersistentPrompt && !hasPersistentCooldown) {
-      res.status(400).json({ error: 'title/description/persistent_prompt must be a string or persistent_cooldown_sec must be a number >= 1' });
+    if (hasPersistentReadyCooldown && (!Number.isFinite(persistent_ready_cooldown_sec) || persistent_ready_cooldown_sec < 0)) {
+      res.status(400).json({ error: 'persistent_ready_cooldown_sec must be a number >= 0' });
+      return;
+    }
+
+    if (!hasTitle && !hasDescription && !hasPersistentPrompt && !hasPersistentCooldown && !hasPersistentReadyCooldown) {
+      res.status(400).json({ error: 'title/description/persistent_prompt must be a string or persistent_cooldown_sec/persistent_ready_cooldown_sec must be a number' });
       return;
     }
 
@@ -240,16 +252,20 @@ export function createRoutes(manager: SessionManager): Router {
     if (hasDescription) {
       found = manager.updateSessionDescription(req.params.id, description) || found;
     }
-    if (hasPersistentPrompt || hasPersistentCooldown) {
+    if (hasPersistentPrompt || hasPersistentCooldown || hasPersistentReadyCooldown) {
       const persistentConfigUpdate: {
         persistentPrompt?: string;
         persistentCooldownSec?: number;
+        persistentReadyCooldownSec?: number;
       } = {};
       if (hasPersistentPrompt) {
         persistentConfigUpdate.persistentPrompt = persistent_prompt;
       }
       if (hasPersistentCooldown) {
         persistentConfigUpdate.persistentCooldownSec = Math.max(1, Math.floor(persistent_cooldown_sec));
+      }
+      if (hasPersistentReadyCooldown) {
+        persistentConfigUpdate.persistentReadyCooldownSec = Math.max(0, Math.floor(persistent_ready_cooldown_sec));
       }
       found = manager.updateSessionPersistentConfig(req.params.id, persistentConfigUpdate) || found;
     }
@@ -263,6 +279,7 @@ export function createRoutes(manager: SessionManager): Router {
       description: hasDescription ? description : undefined,
       persistent_prompt: hasPersistentPrompt ? persistent_prompt.trim() || undefined : undefined,
       persistent_cooldown_sec: hasPersistentCooldown ? Math.max(1, Math.floor(persistent_cooldown_sec)) : undefined,
+      persistent_ready_cooldown_sec: hasPersistentReadyCooldown ? Math.max(0, Math.floor(persistent_ready_cooldown_sec)) : undefined,
     });
   });
 
