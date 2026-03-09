@@ -46,6 +46,7 @@ async function shutdown(signal: string) {
   logger.info(`Received ${signal}, shutting down...`);
   scheduler.stop();
   manager.shutdown();
+  manager.saveInterruptedSessions();
   await manager.destroyAll();
   logger.info('All sessions destroyed, exiting.');
   process.exit(0);
@@ -60,6 +61,11 @@ const server = app.listen(config.port, config.host, () => {
   logger.info(`Max sessions: ${config.maxSessions}, buffer size: ${config.bufferSize}`);
   logger.info(`Session timeout: ${config.sessionTimeoutSec}s`);
   logger.info(`Persistent cooldown default: ${config.persistentCooldownSec}s, ready cooldown: ${config.persistentReadyCooldownSec}s`);
+
+  // Resume sessions that were alive when the server last shut down
+  manager.resumeInterruptedSessions().catch((err) => {
+    logger.error(`Failed to resume interrupted sessions: ${err}`);
+  });
 });
 
 server.on('error', (err) => {

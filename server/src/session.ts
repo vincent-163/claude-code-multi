@@ -2395,6 +2395,75 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Save session IDs that were alive (not dead) at shutdown time.
+   * Called before destroyAll() so we know which sessions were interrupted.
+   */
+  saveInterruptedSessions(): void {
+    const interrupted: { id: string; working_directory: string; title?: string }[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.status !== 'dead') {
+        interrupted.push({
+          id: session.id,
+          working_directory: session.workingDirectory,
+          title: session.title,
+        });
+      }
+    }
+    const filePath = path.join(this.sessionsDir, 'interrupted.json');
+    try {
+      fs.writeFileSync(filePath, JSON.stringify(interrupted));
+      logger.info(`Saved ${interrupted.length} interrupted session(s) to ${filePath}`);
+    } catch (err) {
+      logger.warn(`Failed to save interrupted sessions: ${err}`);
+    }
+  }
+
+  /**
+   * Resume sessions that were alive when the server last shut down.
+   * Sends each a system message indicating state was cleared.
+   */
+  async resumeInterruptedSessions(): Promise<void> {
+    const filePath = path.join(this.sessionsDir, 'interrupted.json');
+    if (!fs.existsSync(filePath)) return;
+
+    let entries: { id: string; working_directory: string; title?: string }[];
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      entries = JSON.parse(raw);
+      // Remove the file immediately to avoid re-processing on next restart
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      logger.warn(`Failed to read interrupted sessions: ${err}`);
+      return;
+    }
+
+    if (!entries.length) return;
+    logger.info(`Resuming ${entries.length} interrupted session(s)...`);
+
+    for (const entry of entries) {
+      // Only resume if the JSONL file still exists on disk
+      const jsonlPath = path.join(this.sessionsDir, `${entry.id}.jsonl`);
+      if (!fs.existsSync(jsonlPath)) {
+        logger.info(`Skipping interrupted session ${entry.id}: JSONL file not found`);
+        continue;
+      }
+
+      try {
+        const session = await this.resumeSession(entry.id);
+        // Send a system message indicating the session was interrupted and state cleared
+        session.pushEvent('message', {
+          type: 'system',
+          subtype: 'server_restart',
+          message: `Server restarted — session was interrupted and state has been cleared. Working directory: ${session.workingDirectory}`,
+        });
+        logger.info(`Resumed interrupted session ${entry.id} (${entry.title || 'untitled'})`);
+      } catch (err) {
+        logger.warn(`Failed to resume interrupted session ${entry.id}: ${err}`);
+      }
+    }
+  }
+
   private cleanupStale(): void {
     const now = Date.now() / 1000;
     for (const [id, session] of this.sessions) {
