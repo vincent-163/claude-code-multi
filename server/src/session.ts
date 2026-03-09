@@ -368,10 +368,30 @@ export class Session {
   }
 
   private schedulePersistentRestartFromAssistant(): void {
-    if (!this.persistentPrompt || !this.lastAssistantMessageAt) return;
+    if (!this.persistentPrompt || this.persistentRestartInProgress) return;
     this.clearPersistentTimer();
-    const safeDelay = Math.max(1, this.persistentCooldownSec);
-    this.persistentNextRunAt = this.lastAssistantMessageAt + safeDelay;
+
+    const now = Date.now() / 1000;
+    const candidates: number[] = [];
+
+    // Ready cooldown: readyCooldownSec from now (session is currently ready)
+    if (this.status === 'ready' && this.persistentReadyCooldownSec >= 0) {
+      candidates.push(now + this.persistentReadyCooldownSec);
+    }
+
+    // Assistant cooldown: persistentCooldownSec after last assistant message
+    if (this.lastAssistantMessageAt) {
+      candidates.push(this.lastAssistantMessageAt + Math.max(1, this.persistentCooldownSec));
+    }
+
+    if (candidates.length === 0) return;
+
+    const targetEpoch = Math.min(...candidates);
+    const delayMs = Math.max(0, (targetEpoch - now)) * 1000;
+
+    this.persistentNextRunAt = targetEpoch;
+    logger.info(`Session ${this.id} persistent restart in ${Math.round(delayMs / 1000)}s (earliest of ready=${this.persistentReadyCooldownSec}s, assistant=${this.persistentCooldownSec}s)`);
+
     this.persistentTimer = setTimeout(() => {
       this.persistentTimer = null;
       this.persistentNextRunAt = undefined;
@@ -390,7 +410,7 @@ export class Session {
         .finally(() => {
           this.persistentRestartInProgress = false;
         });
-    }, safeDelay * 1000);
+    }, delayMs);
   }
 
   onAssistantActivity(): void {
@@ -401,7 +421,13 @@ export class Session {
   private handlePersistentOnStatus(status: SessionStatus): void {
     if (!this.persistentPrompt) return;
     if (status === 'ready') {
-      this.schedulePersistentInitialPrompt();
+      if (!this.persistentHasStarted) {
+        this.schedulePersistentInitialPrompt();
+      } else {
+        // Session returned to ready after prompt already ran — reschedule restart
+        // picking earliest of ready-cooldown vs assistant-cooldown
+        this.schedulePersistentRestartFromAssistant();
+      }
       return;
     }
     if (status === 'dead') {
