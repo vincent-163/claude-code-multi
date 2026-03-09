@@ -22,6 +22,7 @@ export interface Session {
   persistent?: boolean;
   persistent_prompt?: string;
   persistent_cooldown_sec?: number;
+  persistent_ready_cooldown_sec?: number;
   persistent_next_run_at?: number;
 }
 

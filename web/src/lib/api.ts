@@ -33,6 +33,7 @@ export async function createSession(
     backend?: string;
     persistent_prompt?: string;
     cooldown_timeout_sec?: number;
+    persistent_ready_cooldown_sec?: number;
   },
 ): Promise<Session> {
   const res = await fetch(`${baseUrl(settings)}/sessions`, {
@@ -75,6 +76,7 @@ export async function updateSession(
     description?: string;
     persistent_prompt?: string;
     persistent_cooldown_sec?: number;
+    persistent_ready_cooldown_sec?: number;
   },
 ): Promise<void> {
   const res = await fetch(`${baseUrl(settings)}/sessions/${id}`, {

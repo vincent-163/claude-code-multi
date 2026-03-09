@@ -197,7 +197,7 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
         </div>
         {s.persistent && (
           <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            cooldown {s.persistent_cooldown_sec ?? 900}s
+            cooldown {s.persistent_cooldown_sec ?? 900}s · ready {s.persistent_ready_cooldown_sec ?? 30}s
           </div>
         )}
         {(s.total_cost_usd ?? 0) > 0 && <div>${s.total_cost_usd!.toFixed(4)}</div>}
@@ -277,6 +277,7 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
   const [flags, setFlags] = useState('')
   const [persistentPrompt, setPersistentPrompt] = useState('')
   const [cooldownSec, setCooldownSec] = useState('900')
+  const [readyCooldownSec, setReadyCooldownSec] = useState('30')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
 
@@ -298,6 +299,9 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
         persistent_prompt: persistentPrompt.trim() || undefined,
         cooldown_timeout_sec: persistentPrompt.trim()
           ? Math.max(1, parseInt(cooldownSec || '900', 10) || 900)
+          : undefined,
+        persistent_ready_cooldown_sec: persistentPrompt.trim()
+          ? Math.max(0, parseInt(readyCooldownSec || '30', 10) || 30)
           : undefined,
       })
       onCreated(session)
@@ -367,6 +371,18 @@ function CreateSessionDialog({ settings, onUpdateSettings, onCreated, onClose }:
             disabled={!persistentPrompt.trim()}
           />
         </div>
+        <div className="field">
+          <label>Ready Cooldown Seconds</label>
+          <input
+            value={readyCooldownSec}
+            onChange={(e) => setReadyCooldownSec(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="30"
+            disabled={!persistentPrompt.trim()}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+            Additional delay after session becomes ready before sending the prompt. 0 = immediate.
+          </div>
+        </div>
         {backend === 'claude' && (
           <div className="field">
             <div className="checkbox-row">
@@ -395,6 +411,7 @@ function PersistentConfigDialog({ settings, session, onUpdated, onClose }: {
 }) {
   const [persistentPrompt, setPersistentPrompt] = useState(session.persistent_prompt || '')
   const [cooldownSec, setCooldownSec] = useState(String(session.persistent_cooldown_sec ?? 900))
+  const [readyCooldownSec, setReadyCooldownSec] = useState(String(session.persistent_ready_cooldown_sec ?? 30))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -403,16 +420,19 @@ function PersistentConfigDialog({ settings, session, onUpdated, onClose }: {
     setError('')
     const trimmedPrompt = persistentPrompt.trim()
     const nextCooldown = Math.max(1, parseInt(cooldownSec || '900', 10) || 900)
+    const nextReadyCooldown = Math.max(0, parseInt(readyCooldownSec || '30', 10) || 30)
     try {
       await api.updateSession(settings, session.id, {
         persistent_prompt: trimmedPrompt,
         persistent_cooldown_sec: nextCooldown,
+        persistent_ready_cooldown_sec: nextReadyCooldown,
       })
       onUpdated({
         ...session,
         persistent: !!trimmedPrompt,
         persistent_prompt: trimmedPrompt || undefined,
         persistent_cooldown_sec: nextCooldown,
+        persistent_ready_cooldown_sec: nextReadyCooldown,
         persistent_next_run_at: trimmedPrompt ? session.persistent_next_run_at : undefined,
       })
       onClose()
@@ -450,6 +470,18 @@ function PersistentConfigDialog({ settings, session, onUpdated, onClose }: {
             placeholder="900"
             disabled={!persistentPrompt.trim()}
           />
+        </div>
+        <div className="field">
+          <label>Ready Cooldown Seconds</label>
+          <input
+            value={readyCooldownSec}
+            onChange={(e) => setReadyCooldownSec(e.target.value.replace(/[^\d]/g, ''))}
+            placeholder="30"
+            disabled={!persistentPrompt.trim()}
+          />
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>
+            Additional delay after session becomes ready before sending the prompt. 0 = immediate.
+          </div>
         </div>
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
           When prompt is set, the session runs it automatically and restarts after assistant inactivity for the cooldown duration.
