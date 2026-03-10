@@ -27,11 +27,15 @@ class SettingsViewModel(
     private val _authToken = MutableStateFlow("")
     val authToken: StateFlow<String> = _authToken.asStateFlow()
 
+    private val _theme = MutableStateFlow("dark")
+    val theme: StateFlow<String> = _theme.asStateFlow()
+
     init {
         viewModelScope.launch {
             _defaultModel.value = settingsRepository.defaultModel.first()
             _lastWorkingDir.value = settingsRepository.lastWorkingDirectory.first()
             _authToken.value = settingsRepository.authToken.first()
+            _theme.value = settingsRepository.theme.first()
             val config = settingsRepository.sshConfig.first()
             _serverCommand.value = config.serverCommand
         }
@@ -64,6 +68,13 @@ class SettingsViewModel(
         apiClient.authToken = token.ifBlank { null }
         viewModelScope.launch {
             settingsRepository.saveAuthToken(token)
+        }
+    }
+
+    fun updateTheme(theme: String) {
+        _theme.value = theme
+        viewModelScope.launch {
+            settingsRepository.saveTheme(theme)
         }
     }
 }

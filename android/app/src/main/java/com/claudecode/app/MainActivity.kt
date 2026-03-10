@@ -8,17 +8,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.claudecode.app.ui.navigation.AppNavigation
-import com.claudecode.app.ui.theme.ClaudeCodeTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            ClaudeCodeTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    AppNavigation()
-                }
+            // Theme is now applied inside AppNavigation based on user preference
+            Surface(modifier = Modifier.fillMaxSize()) {
+                AppNavigation()
             }
         }
     }

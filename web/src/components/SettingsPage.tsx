@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Settings, Backend } from '../lib/types'
+import type { Settings, Backend, Theme } from '../lib/types'
 
 interface Props {
   settings: Settings
@@ -13,9 +13,10 @@ export default function SettingsPage({ settings, onSave, onBack }: Props) {
   const [defaultModel, setDefaultModel] = useState(settings.defaultModel)
   const [defaultWorkingDirectory, setDefaultWorkingDirectory] = useState(settings.defaultWorkingDirectory)
   const [defaultBackend, setDefaultBackend] = useState<Backend>(settings.defaultBackend)
+  const [theme, setTheme] = useState<Theme>(settings.theme)
 
   const handleSave = () => {
-    onSave({ apiUrl, authToken, defaultModel, defaultWorkingDirectory, defaultBackend })
+    onSave({ apiUrl, authToken, defaultModel, defaultWorkingDirectory, defaultBackend, theme })
   }
 
   return (
@@ -59,6 +60,25 @@ export default function SettingsPage({ settings, onSave, onBack }: Props) {
       <div className="field">
         <label>Default Working Directory</label>
         <input value={defaultWorkingDirectory} onChange={(e) => setDefaultWorkingDirectory(e.target.value)} placeholder="/path/to/project" />
+      </div>
+      <div className="field">
+        <label>Theme</label>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            className={theme === 'dark' ? 'primary' : ''}
+            onClick={() => setTheme('dark')}
+            style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+          >
+            Dark
+          </button>
+          <button
+            className={theme === 'light' ? 'primary' : ''}
+            onClick={() => setTheme('light')}
+            style={{ flex: 1, padding: '6px 12px', fontSize: 13 }}
+          >
+            Light
+          </button>
+        </div>
       </div>
 
       <div className="actions">

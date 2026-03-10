@@ -3,6 +3,7 @@ package com.claudecode.app.ui.theme
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
@@ -27,20 +28,44 @@ private val DarkColorScheme = darkColorScheme(
     outline = DarkBorder
 )
 
+private val LightColorScheme = lightColorScheme(
+    primary = LightAccentBlue,
+    secondary = LightAccentGreen,
+    tertiary = LightAccentPurple,
+    background = LightBackground,
+    surface = LightSurface,
+    surfaceVariant = LightSurfaceVariant,
+    onPrimary = LightBackground,
+    onSecondary = LightBackground,
+    onTertiary = LightBackground,
+    onBackground = LightTextPrimary,
+    onSurface = LightTextPrimary,
+    onSurfaceVariant = LightTextSecondary,
+    error = LightAccentRed,
+    onError = LightBackground,
+    outline = LightBorder
+)
+
 @Composable
-fun ClaudeCodeTheme(content: @Composable () -> Unit) {
+fun ClaudeCodeTheme(
+    isDarkTheme: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val colorScheme = if (isDarkTheme) DarkColorScheme else LightColorScheme
+    val bgColor = if (isDarkTheme) DarkBackground else LightBackground
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = DarkBackground.toArgb()
-            window.navigationBarColor = DarkBackground.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            window.statusBarColor = bgColor.toArgb()
+            window.navigationBarColor = bgColor.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !isDarkTheme
         }
     }
 
     MaterialTheme(
-        colorScheme = DarkColorScheme,
+        colorScheme = colorScheme,
         content = content
     )
 }

@@ -33,6 +33,7 @@ class SettingsRepository(
         val LAST_WORKING_DIR = stringPreferencesKey("last_working_dir")
         val DEFAULT_MODEL = stringPreferencesKey("default_model")
         val AUTH_TOKEN = stringPreferencesKey("auth_token")
+        val THEME = stringPreferencesKey("theme")
     }
 
     val sshConfig: Flow<SshConfig> = context.dataStore.data.map { prefs ->
@@ -67,6 +68,10 @@ class SettingsRepository(
 
     val authToken: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[Keys.AUTH_TOKEN] ?: ""
+    }
+
+    val theme: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[Keys.THEME] ?: "dark"
     }
 
     suspend fun saveSshConfig(config: SshConfig) {
@@ -106,6 +111,12 @@ class SettingsRepository(
     suspend fun saveAuthToken(token: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.AUTH_TOKEN] = token
+        }
+    }
+
+    suspend fun saveTheme(theme: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.THEME] = theme
         }
     }
 }

@@ -1,4 +1,4 @@
-:root {
+:root, [data-theme="dark"] {
   --bg: #0d1117;
   --bg-surface: #161b22;
   --bg-hover: #1c2333;
@@ -6,6 +6,7 @@
   --border: #30363d;
   --text: #e6edf3;
   --text-dim: #8b949e;
+  --text-secondary: #8b949e;
   --text-link: #58a6ff;
   --accent: #58a6ff;
   --accent-dim: #1f6feb;
@@ -16,6 +17,31 @@
   --purple: #bc8cff;
   --radius: 6px;
   --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+  --modal-overlay: rgba(0,0,0,0.6);
+  --user-bubble-text: #fff;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-surface: #f6f8fa;
+  --bg-hover: #eaeef2;
+  --bg-input: #ffffff;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-dim: #656d76;
+  --text-secondary: #656d76;
+  --text-link: #0969da;
+  --accent: #0969da;
+  --accent-dim: #0550ae;
+  --green: #1a7f37;
+  --orange: #9a6700;
+  --red: #cf222e;
+  --blue: #0969da;
+  --purple: #8250df;
+  --modal-overlay: rgba(0,0,0,0.3);
+  --user-bubble-text: #fff;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -162,7 +188,7 @@ input:focus, textarea:focus, select:focus {
 /* Dialog / modal */
 .modal-overlay {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: var(--modal-overlay);
   display: flex; align-items: center; justify-content: center;
   z-index: 100;
 }

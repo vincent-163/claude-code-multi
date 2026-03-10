@@ -1,4 +1,4 @@
-import type { Settings } from './types';
+import type { Settings, Theme } from './types';
 
 const STORAGE_KEY = 'cc-settings';
 
@@ -8,6 +8,7 @@ const defaults: Settings = {
   defaultModel: 'gpt-5.3-codex',
   defaultWorkingDirectory: '',
   defaultBackend: 'codex',
+  theme: 'dark',
 };
 
 export function loadSettings(): Settings {
@@ -20,4 +21,8 @@ export function loadSettings(): Settings {
 
 export function saveSettings(s: Settings): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+}
+
+export function applyTheme(theme: Theme): void {
+  document.documentElement.setAttribute('data-theme', theme);
 }

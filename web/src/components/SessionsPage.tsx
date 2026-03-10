@@ -218,6 +218,13 @@ export default function SessionsPage({ settings, onUpdateSettings, onOpenChat, o
       <div className="header">
         <h1>AI Code</h1>
         <div className="spacer" />
+        <button
+          onClick={() => onUpdateSettings({ ...settings, theme: settings.theme === 'dark' ? 'light' : 'dark' })}
+          title={`Switch to ${settings.theme === 'dark' ? 'light' : 'dark'} theme`}
+          style={{ padding: '4px 10px', fontSize: 15 }}
+        >
+          {settings.theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
+        </button>
         <button onClick={refresh} disabled={loading}>Refresh</button>
         <button onClick={onOpenSettings}>Settings</button>
         <button className="primary" onClick={() => setShowCreate(true)}>New Session</button>

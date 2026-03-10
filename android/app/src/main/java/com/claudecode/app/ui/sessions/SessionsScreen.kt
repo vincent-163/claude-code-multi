@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -65,7 +67,9 @@ fun SessionsScreen(
     viewModel: SessionsViewModel,
     onSessionSelected: (String) -> Unit,
     onDisconnect: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    isDarkTheme: Boolean = true,
+    onToggleTheme: () -> Unit = {}
 ) {
     val sessions by viewModel.sessions.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -89,6 +93,12 @@ fun SessionsScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 ),
                 actions = {
+                    IconButton(onClick = onToggleTheme) {
+                        Icon(
+                            if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                            contentDescription = "Toggle theme"
+                        )
+                    }
                     IconButton(onClick = { viewModel.loadSessions() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }

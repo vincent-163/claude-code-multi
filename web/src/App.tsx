@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import type { Settings } from './lib/types'
-import { loadSettings, saveSettings } from './lib/settings'
+import { loadSettings, saveSettings, applyTheme } from './lib/settings'
 import SessionsPage from './components/SessionsPage'
 import ChatPage from './components/ChatPage'
 import SettingsPage from './components/SettingsPage'
@@ -9,6 +9,11 @@ import SettingsPage from './components/SettingsPage'
 function AppRoutes() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const navigate = useNavigate()
+
+  // Apply theme on mount and when settings change
+  useEffect(() => {
+    applyTheme(settings.theme)
+  }, [settings.theme])
 
   const updateSettings = useCallback((s: Settings) => {
     saveSettings(s)

@@ -159,10 +159,13 @@ export interface BufferedEvent {
 
 // --- Settings ---
 
+export type Theme = 'dark' | 'light';
+
 export interface Settings {
   apiUrl: string;
   authToken: string;
   defaultModel: string;
   defaultWorkingDirectory: string;
   defaultBackend: Backend;
+  theme: Theme;
 }

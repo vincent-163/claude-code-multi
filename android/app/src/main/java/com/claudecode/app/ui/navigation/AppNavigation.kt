@@ -2,6 +2,7 @@ package com.claudecode.app.ui.navigation
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -16,6 +17,8 @@ import com.claudecode.app.ui.sessions.SessionsScreen
 import com.claudecode.app.ui.sessions.SessionsViewModel
 import com.claudecode.app.ui.settings.SettingsScreen
 import com.claudecode.app.ui.settings.SettingsViewModel
+import com.claudecode.app.ui.theme.ClaudeCodeTheme
+import kotlinx.coroutines.flow.map
 
 sealed class Screen {
     data object Connection : Screen()
@@ -34,57 +37,67 @@ fun AppNavigation() {
         ConnectionViewModel(app.sshManager, app.apiClient, app.settingsRepository)
     }
 
-    when (val screen = currentScreen) {
-        is Screen.Connection -> {
-            ConnectionScreen(
-                viewModel = connectionViewModel,
-                onConnected = {
-                    previousScreen = currentScreen
-                    currentScreen = Screen.Sessions
-                }
-            )
-        }
+    // Observe theme from settings
+    val isDarkTheme by app.settingsRepository.theme.map { it != "light" }.collectAsState(initial = true)
 
-        is Screen.Sessions -> {
-            BackHandler { currentScreen = Screen.Connection }
-            val sessionsViewModel = remember { SessionsViewModel(app.apiClient, app.settingsRepository) }
-            SessionsScreen(
-                viewModel = sessionsViewModel,
-                onSessionSelected = { sessionId ->
-                    previousScreen = currentScreen
-                    currentScreen = Screen.Chat(sessionId)
-                },
-                onDisconnect = {
-                    connectionViewModel.disconnect()
-                    currentScreen = Screen.Connection
-                },
-                onSettings = {
-                    previousScreen = currentScreen
-                    currentScreen = Screen.Settings
-                }
-            )
-        }
-
-        is Screen.Chat -> {
-            BackHandler { currentScreen = Screen.Sessions }
-            val chatViewModel = remember(screen.sessionId) {
-                ChatViewModel(app.apiClient, screen.sessionId)
+    ClaudeCodeTheme(isDarkTheme = isDarkTheme) {
+        when (val screen = currentScreen) {
+            is Screen.Connection -> {
+                ConnectionScreen(
+                    viewModel = connectionViewModel,
+                    onConnected = {
+                        previousScreen = currentScreen
+                        currentScreen = Screen.Sessions
+                    }
+                )
             }
-            ChatScreen(
-                viewModel = chatViewModel,
-                onBack = { currentScreen = Screen.Sessions }
-            )
-        }
 
-        is Screen.Settings -> {
-            BackHandler { currentScreen = previousScreen }
-            val settingsViewModel = remember {
-                SettingsViewModel(app.settingsRepository, app.apiClient)
+            is Screen.Sessions -> {
+                BackHandler { currentScreen = Screen.Connection }
+                val sessionsViewModel = remember { SessionsViewModel(app.apiClient, app.settingsRepository) }
+                SessionsScreen(
+                    viewModel = sessionsViewModel,
+                    onSessionSelected = { sessionId ->
+                        previousScreen = currentScreen
+                        currentScreen = Screen.Chat(sessionId)
+                    },
+                    onDisconnect = {
+                        connectionViewModel.disconnect()
+                        currentScreen = Screen.Connection
+                    },
+                    onSettings = {
+                        previousScreen = currentScreen
+                        currentScreen = Screen.Settings
+                    },
+                    isDarkTheme = isDarkTheme,
+                    onToggleTheme = {
+                        val settingsViewModel = SettingsViewModel(app.settingsRepository, app.apiClient)
+                        settingsViewModel.updateTheme(if (isDarkTheme) "light" else "dark")
+                    }
+                )
             }
-            SettingsScreen(
-                viewModel = settingsViewModel,
-                onBack = { currentScreen = previousScreen }
-            )
+
+            is Screen.Chat -> {
+                BackHandler { currentScreen = Screen.Sessions }
+                val chatViewModel = remember(screen.sessionId) {
+                    ChatViewModel(app.apiClient, screen.sessionId)
+                }
+                ChatScreen(
+                    viewModel = chatViewModel,
+                    onBack = { currentScreen = Screen.Sessions }
+                )
+            }
+
+            is Screen.Settings -> {
+                BackHandler { currentScreen = previousScreen }
+                val settingsViewModel = remember {
+                    SettingsViewModel(app.settingsRepository, app.apiClient)
+                }
+                SettingsScreen(
+                    viewModel = settingsViewModel,
+                    onBack = { currentScreen = previousScreen }
+                )
+            }
         }
     }
 }
